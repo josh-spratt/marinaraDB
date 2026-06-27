@@ -6,7 +6,7 @@
 
 ## Overview
 
-MarinaraDB is a fully functional toy RDBMS written in Python. It speaks standard SQL but names every internal component after pasta and Italian food. The joke lives in the internals, CLI output, logs, error messages, and programmatic API — not in the query language.
+MarinaraDB is a fully functional toy RDBMS written in Rust.
 
 ---
 
