@@ -33,7 +33,7 @@ The design is hub-and-spoke: this document is the index; each subsystem has its 
 └─────────────────┬────────────────────┘
                   │ SQL string
 ┌─────────────────▼────────────────────┐
-│            SQL Parser                │  ← sqlparser-rs; no changes to SQL syntax
+│          SaucQL Parser               │  ← custom recursive-descent; SaucQL → AST
 └─────────────────┬────────────────────┘
                   │ AST
 ┌─────────────────▼────────────────────┐
@@ -45,8 +45,8 @@ The design is hub-and-spoke: this document is the index; each subsystem has its 
 └─────────────────┬────────────────────┘
           ┌───────┴────────┐
 ┌─────────▼──────┐  ┌──────▼──────────────┐
-│  Warming Tray  │  │  Strainer  (B-tree)  │
-│  (Page Cache)  │  │  Index               │
+│  Warming Tray  │  │  Strainer  (B-tree) │
+│  (Page Cache)  │  │  Index              │
 └─────────┬──────┘  └─────────────────────┘
           │
 ┌─────────▼──────────────────────────┐
@@ -66,7 +66,7 @@ The design is hub-and-spoke: this document is the index; each subsystem has its 
 | [storage-format.md](../../storage-format.md) | `.pot` file layout, 4KB page header, heap slotted-page format, overflow pages, catalog |
 | [wal-format.md](../../wal-format.md) | Prep Log record layout, CRC32, checkpointing, crash recovery algorithm |
 | [btree-format.md](../../btree-format.md) | Strainer B-tree node layout, insert/lookup/range-scan/delete operations, stats |
-| [sql-semantics.md](../../sql-semantics.md) | Supported statements, NULL semantics, WHERE operators, JOIN strategy, aggregates |
+| [sql-semantics.md](../../sql-semantics.md) | SaucQL keyword mapping, supported statements, VUOTO semantics, STRAINED BY operators, TOSS strategy, aggregates |
 | [transaction-model.md](../../transaction-model.md) | Simmer lifecycle, serializable isolation, locking protocol, dirty page ownership |
 | [error-taxonomy.md](../../error-taxonomy.md) | Scottatura codes by category, REPL display format, Rust `thiserror` enum structure |
 | [testing-strategy.md](../../testing-strategy.md) | Unit test coverage per module, SQL integration test harness, crash recovery test |
@@ -212,7 +212,8 @@ marinaradb/
 | Concern | Choice |
 |---|---|
 | Language | Rust 2021 edition |
-| SQL parsing | `sqlparser-rs` |
+| Query language | SaucQL — custom pasta-themed syntax, standard SQL semantics |
+| Parser | Hand-rolled recursive-descent parser in `src/parser/` |
 | CLI / REPL | `clap` + `rustyline` |
 | Binary I/O | `std::fs`, `memmap2` |
 | Serialization | `bincode` (for catalog ColumnDef blobs) |

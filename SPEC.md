@@ -33,17 +33,71 @@ MarinaraDB is a fully functional toy RDBMS written in Python. It speaks standard
 
 ---
 
-## Query Language
+## Query Language — SaucQL
 
-Standard SQL — no changes. `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `JOIN`, `BEGIN`, `COMMIT`, `ROLLBACK` all work exactly as expected.
+A custom SQL-like language with pasta-themed keywords. Real SQL semantics, silly syntax. SaucQL is where the joke lives hardest — the query language is deliberately ridiculous, while the semantics beneath it are standard and correct.
 
 ```sql
-SELECT name, age FROM users WHERE age > 30;
+-- Read data
+SERVE name, age FROM users STRAINED BY age > 30;
 
-BEGIN;
-INSERT INTO orders (user_id, total) VALUES (1, 49.99);
-COMMIT;
+-- Write data
+LADLE INTO orders (user_id, total) PORTIONS (1, 49.99);
+
+-- Update data
+SEASON users SET total = 59.99 STRAINED BY id = 1;
+
+-- Delete data
+DISCARD FROM users STRAINED BY age < 18;
+
+-- Define a table
+PLATE noodle users (
+  name   TEXT   NOT VUOTO,
+  age    INT
+);
+
+-- Join two noodles
+SERVE u.name, o.total
+FROM users u
+TOSS orders o ON u.id = o.user_id;
+
+-- Transaction
+BEGIN SIMMER;
+  LADLE INTO orders (user_id, total) PORTIONS (1, 49.99);
+  DISCARD FROM users STRAINED BY age < 18;
+FINISH SIMMER;   -- commit
+
+SPILL SIMMER;    -- rollback
 ```
+
+### Keyword Mapping
+
+| SaucQL | SQL equivalent |
+|---|---|
+| `SERVE` | `SELECT` |
+| `FROM` | `FROM` |
+| `STRAINED BY` | `WHERE` |
+| `LADLE INTO` | `INSERT INTO` |
+| `PORTIONS` | `VALUES` |
+| `SEASON` | `UPDATE` |
+| `DISCARD FROM` | `DELETE FROM` |
+| `PLATE noodle` | `CREATE TABLE` |
+| `TOSS OUT noodle` | `DROP TABLE` |
+| `TOSS` | `INNER JOIN` |
+| `ON` | `ON` |
+| `BEGIN SIMMER` | `BEGIN` |
+| `FINISH SIMMER` | `COMMIT` |
+| `SPILL SIMMER` | `ROLLBACK` |
+| `AL DENTE KEY` | `PRIMARY KEY` (auto-increment) |
+| `NOT VUOTO` | `NOT NULL` |
+| `IS VUOTO` | `IS NULL` |
+| `IS NOT VUOTO` | `IS NOT NULL` |
+| `ARRANGED BY` | `ORDER BY` |
+| `ONLY n` | `LIMIT n` |
+| `SKIP n` | `OFFSET n` |
+| `BUNDLED BY` | `GROUP BY` |
+| `STRAIN name ON noodle (col)` | `CREATE INDEX name ON table(col)` |
+| `REMOVE STRAINER name` | `DROP INDEX name` |
 
 ---
 
@@ -56,7 +110,7 @@ $ marinara
 🍅 MarinaraDB v0.1.0 — Buon appetito!
 Connected to pot: my_app.pot
 
-marinara> SELECT * FROM users;
+marinara> SERVE * FROM users;
 Serving 3 strands from noodle 'users'...
 
  id | name  | age
@@ -65,10 +119,10 @@ Serving 3 strands from noodle 'users'...
   2 | Maria |  29
   3 | Gino  |  44
 
-marinara> BEGIN;
+marinara> BEGIN SIMMER;
 Simmer started.
 
-marinara> DROP TABLE users;
+marinara> TOSS OUT noodle users;
 Scottatura: Cannot toss a noodle mid-simmer without a Marinara Bond check.
 ```
 
@@ -89,8 +143,8 @@ use marinaradb::Pot;
 fn main() -> anyhow::Result<()> {
     let pot = Pot::open("my_app.pot")?;
 
-    // Standard SQL — no surprises
-    let strands = pot.execute("SELECT * FROM users WHERE age > 30")?;
+    // SaucQL — pasta-themed keywords, standard semantics
+    let strands = pot.execute("SERVE * FROM users STRAINED BY age > 30")?;
 
     // Themed client API
     println!("{:?}", pot.noodles());          // list tables
@@ -148,7 +202,7 @@ Each component has a companion specification document:
 | `.pot` file & page (Plate) layout | [docs/storage-format.md](docs/storage-format.md) |
 | Prep Log (WAL) format & recovery | [docs/wal-format.md](docs/wal-format.md) |
 | Strainer B-tree format & operations | [docs/btree-format.md](docs/btree-format.md) |
-| SQL statement semantics & NULL rules | [docs/sql-semantics.md](docs/sql-semantics.md) |
+| SaucQL keyword mapping, statement semantics & VUOTO rules | [docs/sql-semantics.md](docs/sql-semantics.md) |
 | Simmer (transaction) lifecycle & locking | [docs/transaction-model.md](docs/transaction-model.md) |
 | Scottatura error codes | [docs/error-taxonomy.md](docs/error-taxonomy.md) |
 | Unit & integration testing strategy | [docs/testing-strategy.md](docs/testing-strategy.md) |
@@ -195,7 +249,8 @@ Full design document (module APIs, architectural decisions): [docs/superpowers/s
 | Concern | Choice |
 |---|---|
 | Language | Rust (2021 edition) |
-| SQL parsing | `sqlparser-rs` |
+| Query language | SaucQL — custom syntax, standard SQL semantics |
+| Parser | Hand-rolled recursive-descent (no external parser library) |
 | CLI / REPL | `clap` + `rustyline` |
 | Binary I/O | `std::fs`, `memmap2` |
 | Serialization | `bincode` |
@@ -203,7 +258,7 @@ Full design document (module APIs, architectural decisions): [docs/superpowers/s
 | Testing | built-in `cargo test` |
 | Packaging | `cargo` + `Cargo.toml` |
 
-`sqlparser-rs` is the de facto standard SQL parser in the Rust ecosystem — it produces a typed AST for standard SQL and is used in production by projects like DataFusion and DeltaLake. All the pasta naming happens downstream of parsing. Rust's ownership model is a natural fit for page/buffer pool management, and the performance headroom means the Warming Tray and Stove can be built simply without worrying about Python's I/O overhead.
+The custom SaucQL parser is hand-rolled in `src/parser/` — a lexer that tokenises SaucQL keywords plus a recursive-descent parser that produces an AST. Writing the parser by hand keeps the dependency count low and makes it straightforward to emit Scottatura errors with SaucQL-native token names. Rust's ownership model is a natural fit for page/buffer pool management, and the performance headroom means the Warming Tray and Stove can be built simply.
 
 ---
 
@@ -213,7 +268,7 @@ Full design document (module APIs, architectural decisions): [docs/superpowers/s
 marinaradb/
 ├── src/
 │   ├── main.rs             # CLI entry point / REPL
-│   ├── parser/             # sqlparser-rs wrapper + AST normalization
+│   ├── parser/             # SaucQL lexer + recursive-descent parser
 │   ├── sous_chef/          # query planner
 │   ├── stove/              # executor + storage engine
 │   ├── warming_tray/       # page cache / buffer pool
@@ -221,7 +276,7 @@ marinaradb/
 │   ├── prep_log/           # write-ahead log
 │   └── lib.rs              # programmatic client API
 ├── tests/
-├── examples/               # sample .sql scripts
+├── examples/               # sample .sauql scripts
 └── Cargo.toml
 ```
 
@@ -233,6 +288,6 @@ marinaradb/
 - **`EXPLAIN` output** — renders the Sous Chef's query plan as a recipe card
 - **`TASTE noodle`** — alias for `DESCRIBE table`, prints schema as a formatted recipe
 - **Simmer mode** — slow query log that prints "letting it simmer..." with elapsed time
-- **`.pot` export** — dump a database as a portable `.sql` script
+- **`.pot` export** — dump a database as a portable `.sauql` script
 - **`marinara serve`** — joke HTTP API with endpoints like `POST /ladle` and `GET /serve`
 - **Scottatura codes** — Italian-named error codes (e.g. `BRUCIATO_001: page checksum mismatch`)

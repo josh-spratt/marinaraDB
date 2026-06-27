@@ -31,15 +31,15 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 |---|---|
 | `PARSE_001` | Unexpected token `{token}` at position {pos}. |
 | `PARSE_002` | Statement type not supported. |
-| `PARSE_003` | Subqueries are not supported in v1. |
-| `PARSE_004` | Multi-column indexes are not supported in v1. |
-| `PARSE_005` | LEFT / RIGHT / FULL JOIN is not supported in v1; use INNER JOIN. |
+| `PARSE_003` | Sub-serves are not supported in v1. |
+| `PARSE_004` | Multi-column strainers are not supported in v1. |
+| `PARSE_005` | LEFT / RIGHT / FULL TOSS is not supported in v1; use TOSS (inner equi-join). |
 | `PARSE_006` | Only equi-joins (ON a.col = b.col) are supported. |
-| `PARSE_007` | UPDATE requires a WHERE clause. |
-| `PARSE_008` | DELETE requires a WHERE clause. |
-| `PARSE_009` | OFFSET without LIMIT is not supported. |
+| `PARSE_007` | SEASON requires a STRAINED BY clause. |
+| `PARSE_008` | DISCARD FROM requires a STRAINED BY clause. |
+| `PARSE_009` | SKIP without ONLY is not supported. |
 | `PARSE_010` | HAVING is not supported in v1. |
-| `PARSE_011` | At most one JOIN per query is supported in v1. |
+| `PARSE_011` | At most one TOSS per serve is supported in v1. |
 | `PARSE_012` | Identifier `{name}` exceeds maximum length of 128 characters. |
 
 ## Type Errors (TIPO_)
@@ -48,7 +48,7 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 |---|---|
 | `TIPO_001` | Cannot store {got} value in ingredient `{col}` (expected {expected}). |
 | `TIPO_002` | Operator `{op}` is not defined for {left} and {right}. |
-| `TIPO_003` | Unknown type `{type_name}`. Supported types: INTEGER, REAL, TEXT, BLOB. |
+| `TIPO_003` | Unknown type `{type_name}`. Supported types: INTEGER / INT / BIGINT, REAL / FLOAT, TEXT, BLOB. |
 | `TIPO_004` | Invalid literal `{literal}` for type {type}. |
 
 ## Schema Errors (RICETTA_)

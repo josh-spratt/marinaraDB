@@ -81,7 +81,6 @@ name = "marinaradb"
 path = "src/lib.rs"
 
 [dependencies]
-sqlparser = "0.54"
 clap = { version = "4", features = ["derive"] }
 rustyline = "14"
 serde = { version = "1", features = ["derive"] }
@@ -205,7 +204,7 @@ pub mod pot;
 
 `src/parser/mod.rs`:
 ```rust
-// sqlparser-rs wrapper — Phase 2
+// SaucQL recursive-descent parser — Phase 2
 ```
 
 `src/sous_chef/mod.rs`:
@@ -1915,13 +1914,13 @@ git commit -m "feat: Pot public API — create/drop table, insert strands, scan,
 
 ## What Phase 2 Adds
 
-Phase 2 (SQL Engine) will add:
+Phase 2 (SaucQL Engine) will add:
 - Full `Scottatura` error set (all codes from `docs/error-taxonomy.md`)
-- `sqlparser-rs` wrapper in `src/parser/`
+- SaucQL recursive-descent parser in `src/parser/` (lexer + parser → AST)
 - Sous Chef query planner (`Plan` enum, index selection)
-- Stove executor (walks `Plan`, handles SELECT/INSERT/UPDATE/DELETE + WHERE/JOIN/ORDER BY/LIMIT)
+- Stove executor (walks `Plan`, handles SERVE/LADLE/SEASON/DISCARD + STRAINED BY/TOSS/ARRANGED BY/ONLY)
 - Multi-page heap traversal (following `next_page` pointers)
-- `Pot::execute(sql: &str) -> Result<ResultSet, Scottatura>`
+- `Pot::execute(sauql: &str) -> Result<ResultSet, Scottatura>`
 - `marinara` REPL (`clap` + `rustyline`)
 
 Deliverable: A working REPL where you run SQL against a `.pot` file.
