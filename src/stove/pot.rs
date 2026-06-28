@@ -51,6 +51,14 @@ impl Pot {
             .ok_or_else(|| Scottatura::NoodleNotFound { name: noodle.to_string() })?
             .clone();
 
+        if values.len() != entry.cols.len() {
+            return Err(Scottatura::TypeMismatch {
+                got: format!("{} values", values.len()),
+                col: noodle.to_string(),
+                expected: format!("{} columns", entry.cols.len()),
+            });
+        }
+
         for (val, col) in values.iter().zip(entry.cols.iter()) {
             if matches!(val, Value::Null) && !col.nullable {
                 return Err(Scottatura::NullConstraintViolation { col: col.name.clone() });

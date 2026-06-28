@@ -11,7 +11,7 @@ pub fn encoded_fixed_size(col_type: &ColType) -> usize {
     }
 }
 
-pub fn encode_value(val: &Value, col_type: &ColType) -> Result<Vec<u8>, Scottatura> {
+pub fn encode_value(val: &Value, col_type: &ColType, col_name: &str) -> Result<Vec<u8>, Scottatura> {
     match (val, col_type) {
         (Value::Null, ColType::Integer | ColType::Real) => Ok(vec![0u8; 8]),
         (Value::Null, ColType::Text | ColType::Blob) => {
@@ -33,7 +33,7 @@ pub fn encode_value(val: &Value, col_type: &ColType) -> Result<Vec<u8>, Scottatu
         }
         (got, expected) => Err(Scottatura::TypeMismatch {
             got: format!("{got:?}"),
-            col: String::new(),
+            col: col_name.to_string(),
             expected: format!("{expected:?}"),
         }),
     }
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn test_encode_decode_integer() {
         let val = Value::Integer(42);
-        let encoded = encode_value(&val, &ColType::Integer).unwrap();
+        let encoded = encode_value(&val, &ColType::Integer, "id").unwrap();
         assert_eq!(encoded.len(), 8);
         let decoded = decode_value(&encoded, &ColType::Integer, false);
         assert_eq!(decoded, Value::Integer(42));
@@ -79,24 +79,24 @@ mod tests {
     #[test]
     fn test_encode_decode_negative_integer() {
         let val = Value::Integer(-999);
-        let encoded = encode_value(&val, &ColType::Integer).unwrap();
+        let encoded = encode_value(&val, &ColType::Integer, "id").unwrap();
         let decoded = decode_value(&encoded, &ColType::Integer, false);
         assert_eq!(decoded, Value::Integer(-999));
     }
 
     #[test]
     fn test_encode_decode_real() {
-        let val = Value::Real(3.14);
-        let encoded = encode_value(&val, &ColType::Real).unwrap();
+        let val = Value::Real(2.5);
+        let encoded = encode_value(&val, &ColType::Real, "score").unwrap();
         assert_eq!(encoded.len(), 8);
         let decoded = decode_value(&encoded, &ColType::Real, false);
-        assert_eq!(decoded, Value::Real(3.14));
+        assert_eq!(decoded, Value::Real(2.5));
     }
 
     #[test]
     fn test_encode_decode_text() {
         let val = Value::Text("hello".to_string());
-        let encoded = encode_value(&val, &ColType::Text).unwrap();
+        let encoded = encode_value(&val, &ColType::Text, "name").unwrap();
         assert_eq!(encoded.len(), 4 + 5);
         let decoded = decode_value(&encoded, &ColType::Text, false);
         assert_eq!(decoded, Value::Text("hello".to_string()));
@@ -105,7 +105,7 @@ mod tests {
     #[test]
     fn test_encode_decode_empty_text() {
         let val = Value::Text(String::new());
-        let encoded = encode_value(&val, &ColType::Text).unwrap();
+        let encoded = encode_value(&val, &ColType::Text, "name").unwrap();
         assert_eq!(encoded.len(), 4);
         let decoded = decode_value(&encoded, &ColType::Text, false);
         assert_eq!(decoded, Value::Text(String::new()));
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn test_encode_decode_blob() {
         let val = Value::Blob(vec![0xde, 0xad, 0xbe, 0xef]);
-        let encoded = encode_value(&val, &ColType::Blob).unwrap();
+        let encoded = encode_value(&val, &ColType::Blob, "data").unwrap();
         assert_eq!(encoded.len(), 4 + 4);
         let decoded = decode_value(&encoded, &ColType::Blob, false);
         assert_eq!(decoded, Value::Blob(vec![0xde, 0xad, 0xbe, 0xef]));
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_integer_promoted_to_real() {
         let val = Value::Integer(5);
-        let encoded = encode_value(&val, &ColType::Real).unwrap();
+        let encoded = encode_value(&val, &ColType::Real, "score").unwrap();
         let decoded = decode_value(&encoded, &ColType::Real, false);
         assert_eq!(decoded, Value::Real(5.0));
     }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn test_type_mismatch_errors() {
         let val = Value::Text("hello".to_string());
-        let result = encode_value(&val, &ColType::Integer);
+        let result = encode_value(&val, &ColType::Integer, "age");
         assert!(matches!(result, Err(Scottatura::TypeMismatch { .. })));
     }
 

@@ -16,7 +16,7 @@ pub fn encode_row(al_dente_key: i64, values: &[Value], cols: &[ColumnDef]) -> Re
     out.extend_from_slice(&bitmap);
 
     for (val, col) in values.iter().zip(cols.iter()) {
-        out.extend(encode_value(val, &col.col_type)?);
+        out.extend(encode_value(val, &col.col_type, &col.name)?);
     }
     Ok(out)
 }

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::{ColumnDef, Scottatura};
-use crate::stove::page::{Page, PageType, PAGE_HEADER_SIZE};
+use crate::stove::page::{Page, PageType, PAGE_HEADER_SIZE, PAGE_SIZE};
 use crate::stove::pot_file::PotFile;
 use crate::warming_tray::WarmingTray;
 
@@ -76,6 +76,11 @@ impl Catalog {
     fn persist(&mut self, tray: &mut WarmingTray, pot: &mut PotFile) -> Result<(), Scottatura> {
         let encoded = bincode::serialize(&self.entries)
             .map_err(|e| Scottatura::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        if encoded.len() > (PAGE_SIZE - PAGE_HEADER_SIZE - 4) {
+            return Err(Scottatura::IoError(std::io::Error::other(
+                "catalog too large for single page",
+            )));
+        }
         let page = tray.fetch(self.catalog_page_num, pot)?;
         let len = encoded.len() as u32;
         page.data[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + 4].copy_from_slice(&len.to_le_bytes());
