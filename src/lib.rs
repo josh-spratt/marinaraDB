@@ -71,4 +71,13 @@ pub enum Scottatura {
 
     #[error("Scottatura [VINCOLO_002]: Vuoto not allowed in ingredient `{col}` (declared NOT NULL).")]
     NullConstraintViolation { col: String },
+
+    #[error("Scottatura [PARSE_001]: Unexpected token `{token}` at position {pos}.")]
+    UnexpectedToken { token: String, pos: usize },
+
+    #[error("Scottatura [PARSE_012]: Identifier `{name}` exceeds maximum length of 128 characters.")]
+    IdentifierTooLong { name: String },
+
+    #[error("Scottatura [TIPO_004]: Invalid literal `{literal}` for type {type_name}.")]
+    InvalidLiteral { literal: String, type_name: String },
 }
