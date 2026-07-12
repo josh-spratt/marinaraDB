@@ -1,5 +1,6 @@
 # Generated files
 /target/
+/.superpowers/
 
 # Rust build artifacts
 **/*.rs.bk

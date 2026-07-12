@@ -71,4 +71,52 @@ pub enum Scottatura {
 
     #[error("Scottatura [VINCOLO_002]: Vuoto not allowed in ingredient `{col}` (declared NOT NULL).")]
     NullConstraintViolation { col: String },
+
+    #[error("Scottatura [PARSE_001]: Unexpected token `{token}` at position {pos}.")]
+    UnexpectedToken { token: String, pos: usize },
+
+    #[error("Scottatura [PARSE_012]: Identifier `{name}` exceeds maximum length of 128 characters.")]
+    IdentifierTooLong { name: String },
+
+    #[error("Scottatura [TIPO_004]: Invalid literal `{literal}` for type {type_name}.")]
+    InvalidLiteral { literal: String, type_name: String },
+
+    #[error("Scottatura [PARSE_003]: Sub-serves are not supported in v1.")]
+    SubServeNotSupported,
+
+    #[error("Scottatura [PARSE_004]: Multi-column strainers are not supported in v1.")]
+    MultiColumnStrainerNotSupported,
+
+    #[error("Scottatura [TIPO_003]: Unknown type `{type_name}`. Supported types: INTEGER / INT / BIGINT, REAL / FLOAT, TEXT, BLOB.")]
+    UnknownType { type_name: String },
+
+    #[error("Scottatura [RICETTA_006]: Column `id` is reserved for the Al Dente Key; remove it from the column list.")]
+    ReservedIdColumn,
+
+    #[error("Scottatura [PARSE_005]: LEFT / RIGHT / FULL TOSS is not supported in v1; use TOSS (inner equi-join).")]
+    OuterTossNotSupported,
+
+    #[error("Scottatura [PARSE_006]: Only equi-joins (ON a.col = b.col) are supported.")]
+    NonEquiJoinNotSupported,
+
+    #[error("Scottatura [PARSE_009]: SKIP without ONLY is not supported.")]
+    SkipWithoutOnly,
+
+    #[error("Scottatura [PARSE_010]: HAVING is not supported in v1.")]
+    HavingNotSupported,
+
+    #[error("Scottatura [PARSE_011]: At most one TOSS per serve is supported in v1.")]
+    MultipleTossNotSupported,
+
+    #[error("Scottatura [RICETTA_009]: Value count ({got}) does not match column count ({expected}).")]
+    ValueCountMismatch { got: usize, expected: usize },
+
+    #[error("Scottatura [PARSE_007]: SEASON requires a STRAINED BY clause.")]
+    SeasonRequiresFilter,
+
+    #[error("Scottatura [PARSE_008]: DISCARD FROM requires a STRAINED BY clause.")]
+    DiscardRequiresFilter,
+
+    #[error("Scottatura [PARSE_002]: Statement type not supported.")]
+    StatementNotSupported,
 }

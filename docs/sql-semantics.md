@@ -98,7 +98,7 @@ LADLE INTO noodle_name (col1, col2, ...) PORTIONS (val1, val2, ...), (val3, val4
 ```
 
 - Al Dente Key is always auto-assigned; including `id` in the column list is `RICETTA_006`.
-- Value count must match column count (`PARSE_001`).
+- Value count must match column count (`RICETTA_009`).
 - Type of each value must match the column type (`TIPO_001`).
 - `NOT VUOTO` columns with a `VUOTO` literal produce `VINCOLO_002`.
 - The auto-assigned Al Dente Key is returned in `ResultSet::last_insert_key`. In the REPL: `1 strand added (id = {key}).`
