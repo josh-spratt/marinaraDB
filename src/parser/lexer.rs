@@ -23,21 +23,21 @@ pub enum Token {
 }
 
 pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
-    let bytes = src.as_bytes();
+    let chars: Vec<char> = src.chars().collect();
     let mut tokens = Vec::new();
     let mut i = 0usize;
-    let len = bytes.len();
+    let len = chars.len();
 
     while i < len {
-        let c = bytes[i] as char;
+        let c = chars[i];
 
         if c.is_whitespace() {
             i += 1;
             continue;
         }
 
-        if c == '-' && i + 1 < len && bytes[i + 1] as char == '-' {
-            while i < len && bytes[i] as char != '\n' {
+        if c == '-' && i + 1 < len && chars[i + 1] == '-' {
+            while i < len && chars[i] != '\n' {
                 i += 1;
             }
             continue;
@@ -51,9 +51,9 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
                 if i >= len {
                     return Err(Scottatura::UnexpectedToken { token: "<eof>".into(), pos: start });
                 }
-                let ch = bytes[i] as char;
+                let ch = chars[i];
                 if ch == '\'' {
-                    if i + 1 < len && bytes[i + 1] as char == '\'' {
+                    if i + 1 < len && chars[i + 1] == '\'' {
                         s.push('\'');
                         i += 2;
                         continue;
@@ -76,13 +76,16 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
                 if i >= len {
                     return Err(Scottatura::UnexpectedToken { token: "<eof>".into(), pos: start });
                 }
-                let ch = bytes[i] as char;
+                let ch = chars[i];
                 if ch == '"' {
                     i += 1;
                     break;
                 }
                 s.push(ch);
                 i += 1;
+            }
+            if s.chars().count() > 128 {
+                return Err(Scottatura::IdentifierTooLong { name: s });
             }
             tokens.push((Token::Ident(s.to_lowercase()), start));
             continue;
@@ -91,19 +94,22 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
         if c.is_ascii_digit() {
             let start = i;
             let mut is_real = false;
-            while i < len && (bytes[i] as char).is_ascii_digit() {
+            while i < len && chars[i].is_ascii_digit() {
                 i += 1;
             }
-            if i < len && bytes[i] as char == '.' && i + 1 < len && (bytes[i + 1] as char).is_ascii_digit() {
+            if i < len && chars[i] == '.' && i + 1 < len && chars[i + 1].is_ascii_digit() {
                 is_real = true;
                 i += 1;
-                while i < len && (bytes[i] as char).is_ascii_digit() {
+                while i < len && chars[i].is_ascii_digit() {
                     i += 1;
                 }
             }
-            let text = &src[start..i];
+            let text: String = chars[start..i].iter().collect();
             if is_real {
-                tokens.push((Token::RealLiteral(text.parse().unwrap()), start));
+                match text.parse::<f64>() {
+                    Ok(f) => tokens.push((Token::RealLiteral(f), start)),
+                    Err(_) => return Err(Scottatura::InvalidLiteral { literal: text.to_string(), type_name: "REAL".to_string() }),
+                }
             } else {
                 match text.parse::<i64>() {
                     Ok(n) => tokens.push((Token::IntLiteral(n), start)),
@@ -115,14 +121,14 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
 
         if c.is_ascii_alphabetic() || c == '_' {
             let start = i;
-            while i < len && ((bytes[i] as char).is_ascii_alphanumeric() || bytes[i] as char == '_') {
+            while i < len && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
                 i += 1;
             }
-            let text = &src[start..i];
+            let text: String = chars[start..i].iter().collect();
             if text.len() > 128 {
-                return Err(Scottatura::IdentifierTooLong { name: text.to_string() });
+                return Err(Scottatura::IdentifierTooLong { name: text });
             }
-            tokens.push((keyword_or_ident(text), start));
+            tokens.push((keyword_or_ident(&text), start));
             continue;
         }
 
@@ -138,10 +144,10 @@ pub fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, Scottatura> {
             '*' => { i += 1; Token::Star }
             '/' => { i += 1; Token::Slash }
             '=' => { i += 1; Token::Eq }
-            '!' if i + 1 < len && bytes[i + 1] as char == '=' => { i += 2; Token::Neq }
-            '<' if i + 1 < len && bytes[i + 1] as char == '=' => { i += 2; Token::Lte }
+            '!' if i + 1 < len && chars[i + 1] == '=' => { i += 2; Token::Neq }
+            '<' if i + 1 < len && chars[i + 1] == '=' => { i += 2; Token::Lte }
             '<' => { i += 1; Token::Lt }
-            '>' if i + 1 < len && bytes[i + 1] as char == '=' => { i += 2; Token::Gte }
+            '>' if i + 1 < len && chars[i + 1] == '=' => { i += 2; Token::Gte }
             '>' => { i += 1; Token::Gt }
             other => return Err(Scottatura::UnexpectedToken { token: other.to_string(), pos: start }),
         };
@@ -221,10 +227,10 @@ mod tests {
 
     #[test]
     fn test_tokenize_literals() {
-        let toks = kinds("42 3.14 'hello'");
+        let toks = kinds("42 3.5 'hello'");
         assert_eq!(toks, vec![
             Token::IntLiteral(42),
-            Token::RealLiteral(3.14),
+            Token::RealLiteral(3.5),
             Token::StringLiteral("hello".into()),
             Token::Eof,
         ]);
@@ -270,5 +276,36 @@ mod tests {
         let long_name = "a".repeat(129);
         let err = tokenize(&long_name).unwrap_err();
         assert!(matches!(err, Scottatura::IdentifierTooLong { .. }));
+    }
+
+    #[test]
+    fn test_tokenize_rejects_quoted_identifier_over_128_chars() {
+        let long_name = format!("\"{}\"", "a".repeat(129));
+        let err = tokenize(&long_name).unwrap_err();
+        assert!(matches!(err, Scottatura::IdentifierTooLong { .. }));
+    }
+
+    #[test]
+    fn test_tokenize_real_literal_does_not_panic_and_parses() {
+        // The scanning logic only admits digit sequences into the real-literal
+        // parse path, so a genuinely unparsable "REAL" text is unreachable via
+        // normal tokenizing today. This test locks in that well-formed reals
+        // still parse correctly via the non-panicking `.map_err` path (rather
+        // than the old `.unwrap()`), so a future change to the digit scan
+        // can't silently reintroduce a panic on malformed input.
+        let toks = kinds("123.456");
+        assert_eq!(toks, vec![Token::RealLiteral(123.456), Token::Eof]);
+    }
+
+    #[test]
+    fn test_tokenize_string_literal_with_multibyte_utf8() {
+        let toks = kinds("'café naïve'");
+        assert_eq!(toks, vec![Token::StringLiteral("café naïve".into()), Token::Eof]);
+    }
+
+    #[test]
+    fn test_tokenize_quoted_identifier_with_multibyte_utf8() {
+        let toks = kinds("\"café\"");
+        assert_eq!(toks, vec![Token::Ident("café".into()), Token::Eof]);
     }
 }
