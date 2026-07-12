@@ -83,4 +83,13 @@ pub enum Scottatura {
 
     #[error("Scottatura [PARSE_003]: Sub-serves are not supported in v1.")]
     SubServeNotSupported,
+
+    #[error("Scottatura [PARSE_004]: Multi-column strainers are not supported in v1.")]
+    MultiColumnStrainerNotSupported,
+
+    #[error("Scottatura [TIPO_003]: Unknown type `{type_name}`. Supported types: INTEGER / INT / BIGINT, REAL / FLOAT, TEXT, BLOB.")]
+    UnknownType { type_name: String },
+
+    #[error("Scottatura [RICETTA_006]: Column `id` is reserved for the Al Dente Key; remove it from the column list.")]
+    ReservedIdColumn,
 }

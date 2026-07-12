@@ -1,7 +1,7 @@
 pub mod ast;
 pub mod lexer;
 
-use ast::{BinOp, Expr};
+use ast::{BinOp, ColumnSpec, Expr, Statement};
 use lexer::Token;
 use crate::{Scottatura, Value};
 
@@ -217,6 +217,78 @@ impl Parser {
             other => Err(Scottatura::UnexpectedToken { token: format!("{other:?}"), pos: self.peek_pos() }),
         }
     }
+
+    pub fn parse_stmt(&mut self) -> Result<Statement, Scottatura> {
+        match self.peek().clone() {
+            Token::Plate => self.parse_create_table(),
+            Token::Toss => self.parse_drop_table(),
+            Token::Strain => self.parse_create_index(),
+            Token::Remove => self.parse_drop_index(),
+            other => Err(Scottatura::UnexpectedToken { token: format!("{other:?}"), pos: self.peek_pos() }),
+        }
+    }
+
+    fn parse_create_table(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Plate)?;
+        self.expect(Token::Noodle)?;
+        let name = self.expect_ident()?;
+        self.expect(Token::LParen)?;
+        let mut columns = Vec::new();
+        loop {
+            let col_name = self.expect_ident()?;
+            if col_name == "id" {
+                return Err(Scottatura::ReservedIdColumn);
+            }
+            let type_name = self.expect_ident()?;
+            let col_type = match type_name.to_ascii_uppercase().as_str() {
+                "INTEGER" | "INT" | "BIGINT" => crate::ColType::Integer,
+                "REAL" | "FLOAT" => crate::ColType::Real,
+                "TEXT" => crate::ColType::Text,
+                "BLOB" => crate::ColType::Blob,
+                _ => return Err(Scottatura::UnknownType { type_name }),
+            };
+            let mut not_null = false;
+            if self.check(&Token::Not) {
+                self.advance();
+                self.expect(Token::Vuoto)?;
+                not_null = true;
+            }
+            columns.push(ColumnSpec { name: col_name, col_type, not_null });
+            if self.check(&Token::Comma) { self.advance(); continue; }
+            break;
+        }
+        self.expect(Token::RParen)?;
+        Ok(Statement::CreateTable { name, columns })
+    }
+
+    fn parse_drop_table(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Toss)?;
+        self.expect(Token::Out)?;
+        self.expect(Token::Noodle)?;
+        let name = self.expect_ident()?;
+        Ok(Statement::DropTable { name })
+    }
+
+    fn parse_create_index(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Strain)?;
+        let index_name = self.expect_ident()?;
+        self.expect(Token::On)?;
+        let table = self.expect_ident()?;
+        self.expect(Token::LParen)?;
+        let column = self.expect_ident()?;
+        if self.check(&Token::Comma) {
+            return Err(Scottatura::MultiColumnStrainerNotSupported);
+        }
+        self.expect(Token::RParen)?;
+        Ok(Statement::CreateIndex { index_name, table, column })
+    }
+
+    fn parse_drop_index(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Remove)?;
+        self.expect(Token::Strainer)?;
+        let index_name = self.expect_ident()?;
+        Ok(Statement::DropIndex { index_name })
+    }
 }
 
 fn is_aggregate_fn(name: &str) -> bool {
@@ -366,5 +438,75 @@ mod expr_tests {
         let mut p = Parser::new(tokens);
         let err = p.parse_expr().unwrap_err();
         assert!(matches!(err, Scottatura::SubServeNotSupported));
+    }
+}
+
+#[cfg(test)]
+mod ddl_tests {
+    use super::*;
+    use crate::ColType;
+
+    fn parse(src: &str) -> Statement {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap()
+    }
+
+    fn parse_err(src: &str) -> Scottatura {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap_err()
+    }
+
+    #[test]
+    fn test_parse_create_table() {
+        let stmt = parse("PLATE noodle users (name TEXT NOT VUOTO, age INT);");
+        assert_eq!(stmt, Statement::CreateTable {
+            name: "users".into(),
+            columns: vec![
+                ColumnSpec { name: "name".into(), col_type: ColType::Text, not_null: true },
+                ColumnSpec { name: "age".into(), col_type: ColType::Integer, not_null: false },
+            ],
+        });
+    }
+
+    #[test]
+    fn test_parse_create_table_rejects_id_column() {
+        let err = parse_err("PLATE noodle users (id INT);");
+        assert!(matches!(err, Scottatura::ReservedIdColumn));
+    }
+
+    #[test]
+    fn test_parse_create_table_rejects_unknown_type() {
+        let err = parse_err("PLATE noodle users (name VARCHAR);");
+        assert!(matches!(err, Scottatura::UnknownType { .. }));
+    }
+
+    #[test]
+    fn test_parse_drop_table() {
+        let stmt = parse("TOSS OUT noodle users;");
+        assert_eq!(stmt, Statement::DropTable { name: "users".into() });
+    }
+
+    #[test]
+    fn test_parse_create_index() {
+        let stmt = parse("STRAIN idx_age ON users (age);");
+        assert_eq!(stmt, Statement::CreateIndex {
+            index_name: "idx_age".into(),
+            table: "users".into(),
+            column: "age".into(),
+        });
+    }
+
+    #[test]
+    fn test_parse_create_index_rejects_multi_column() {
+        let err = parse_err("STRAIN idx ON users (age, name);");
+        assert!(matches!(err, Scottatura::MultiColumnStrainerNotSupported));
+    }
+
+    #[test]
+    fn test_parse_drop_index() {
+        let stmt = parse("REMOVE STRAINER idx_age;");
+        assert_eq!(stmt, Statement::DropIndex { index_name: "idx_age".into() });
     }
 }
