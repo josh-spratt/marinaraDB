@@ -116,4 +116,7 @@ pub enum Scottatura {
 
     #[error("Scottatura [PARSE_008]: DISCARD FROM requires a STRAINED BY clause.")]
     DiscardRequiresFilter,
+
+    #[error("Scottatura [PARSE_002]: Statement type not supported.")]
+    StatementNotSupported,
 }

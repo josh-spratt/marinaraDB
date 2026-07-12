@@ -233,7 +233,10 @@ impl Parser {
             Token::Ladle => self.parse_insert(),
             Token::Season => self.parse_update(),
             Token::Discard => self.parse_delete(),
-            other => Err(Scottatura::UnexpectedToken { token: format!("{other:?}"), pos: self.peek_pos() }),
+            Token::Begin => { self.advance(); self.expect(Token::Simmer)?; Ok(Statement::BeginSimmer) }
+            Token::Finish => { self.advance(); self.expect(Token::Simmer)?; Ok(Statement::FinishSimmer) }
+            Token::Spill => { self.advance(); self.expect(Token::Simmer)?; Ok(Statement::SpillSimmer) }
+            _ => Err(Scottatura::StatementNotSupported),
         }
     }
 
@@ -515,6 +518,36 @@ fn is_aggregate_fn(name: &str) -> bool {
 
 fn is_outer_join_modifier(word: &str) -> bool {
     matches!(word.to_ascii_lowercase().as_str(), "left" | "right" | "full")
+}
+
+/// Parses exactly one statement from `sql`, tolerating an optional trailing
+/// semicolon. Errors if any tokens remain after that (the full token stream
+/// must be consumed).
+pub fn parse_statement(sql: &str) -> Result<Statement, Scottatura> {
+    let tokens = lexer::tokenize(sql)?;
+    let mut p = Parser::new(tokens);
+    let stmt = p.parse_stmt()?;
+    if p.check(&Token::Semicolon) {
+        p.advance();
+    }
+    if !p.check(&Token::Eof) {
+        return Err(Scottatura::UnexpectedToken { token: format!("{:?}", p.peek()), pos: p.peek_pos() });
+    }
+    Ok(stmt)
+}
+
+/// Parses multiple semicolon-separated statements until EOF.
+pub fn parse_program(sql: &str) -> Result<Vec<Statement>, Scottatura> {
+    let tokens = lexer::tokenize(sql)?;
+    let mut p = Parser::new(tokens);
+    let mut stmts = Vec::new();
+    while !p.check(&Token::Eof) {
+        stmts.push(p.parse_stmt()?);
+        if p.check(&Token::Semicolon) {
+            p.advance();
+        }
+    }
+    Ok(stmts)
 }
 
 #[cfg(test)]
@@ -960,5 +993,48 @@ mod dml_tests {
     fn test_parse_delete_rejects_missing_strained_by() {
         let err = parse_err("DISCARD FROM users;");
         assert!(matches!(err, Scottatura::DiscardRequiresFilter));
+    }
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_begin_finish_spill_simmer() {
+        assert_eq!(parse_statement("BEGIN SIMMER;").unwrap(), Statement::BeginSimmer);
+        assert_eq!(parse_statement("FINISH SIMMER;").unwrap(), Statement::FinishSimmer);
+        assert_eq!(parse_statement("SPILL SIMMER;").unwrap(), Statement::SpillSimmer);
+    }
+
+    #[test]
+    fn test_parse_statement_rejects_trailing_garbage() {
+        let err = parse_statement("SERVE * FROM users; SERVE * FROM orders;").unwrap_err();
+        assert!(matches!(err, Scottatura::UnexpectedToken { .. }));
+    }
+
+    #[test]
+    fn test_parse_statement_unsupported_form() {
+        let err = parse_statement("EXPLAIN SERVE * FROM users;").unwrap_err();
+        assert!(matches!(err, Scottatura::StatementNotSupported));
+    }
+
+    #[test]
+    fn test_parse_program_multiple_statements() {
+        let stmts = parse_program("
+            PLATE noodle users (name TEXT);
+            LADLE INTO users (name) PORTIONS ('Tony');
+            SERVE * FROM users;
+        ").unwrap();
+        assert_eq!(stmts.len(), 3);
+        assert!(matches!(stmts[0], Statement::CreateTable { .. }));
+        assert!(matches!(stmts[1], Statement::Insert { .. }));
+        assert!(matches!(stmts[2], Statement::Select(_)));
+    }
+
+    #[test]
+    fn test_parse_program_tolerates_trailing_semicolon_and_whitespace() {
+        let stmts = parse_program("  BEGIN SIMMER;  \n\n  FINISH SIMMER;  ").unwrap();
+        assert_eq!(stmts, vec![Statement::BeginSimmer, Statement::FinishSimmer]);
     }
 }
