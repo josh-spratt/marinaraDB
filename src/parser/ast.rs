@@ -1,6 +1,7 @@
 use crate::{ColType, Value};
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // SelectStatement is inherently larger; boxing would ripple indirection into every parse/match site for no measurable benefit in this toy DB
 pub enum Statement {
     CreateTable { name: String, columns: Vec<ColumnSpec> },
     DropTable { name: String },
