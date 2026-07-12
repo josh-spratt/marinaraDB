@@ -298,6 +298,16 @@ mod tests {
     }
 
     #[test]
+    fn test_tokenize_rejects_integer_literal_that_overflows_i64() {
+        // Unlike the REAL path above, an all-digit sequence *can* fail to
+        // parse as i64 once it exceeds i64::MAX, so this path is reachable
+        // via normal tokenizing and must surface TIPO_004, not panic.
+        let too_big = "99999999999999999999";
+        let err = tokenize(too_big).unwrap_err();
+        assert!(matches!(err, Scottatura::InvalidLiteral { ref type_name, .. } if type_name == "INTEGER"));
+    }
+
+    #[test]
     fn test_tokenize_string_literal_with_multibyte_utf8() {
         let toks = kinds("'café naïve'");
         assert_eq!(toks, vec![Token::StringLiteral("café naïve".into()), Token::Eof]);
