@@ -107,4 +107,13 @@ pub enum Scottatura {
 
     #[error("Scottatura [PARSE_011]: At most one TOSS per serve is supported in v1.")]
     MultipleTossNotSupported,
+
+    #[error("Scottatura [RICETTA_009]: Value count ({got}) does not match column count ({expected}).")]
+    ValueCountMismatch { got: usize, expected: usize },
+
+    #[error("Scottatura [PARSE_007]: SEASON requires a STRAINED BY clause.")]
+    SeasonRequiresFilter,
+
+    #[error("Scottatura [PARSE_008]: DISCARD FROM requires a STRAINED BY clause.")]
+    DiscardRequiresFilter,
 }

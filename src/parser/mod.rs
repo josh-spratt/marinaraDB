@@ -230,8 +230,84 @@ impl Parser {
             Token::Strain => self.parse_create_index(),
             Token::Remove => self.parse_drop_index(),
             Token::Serve => self.parse_select().map(Statement::Select),
+            Token::Ladle => self.parse_insert(),
+            Token::Season => self.parse_update(),
+            Token::Discard => self.parse_delete(),
             other => Err(Scottatura::UnexpectedToken { token: format!("{other:?}"), pos: self.peek_pos() }),
         }
+    }
+
+    fn parse_insert(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Ladle)?;
+        self.expect(Token::Into)?;
+        let table = self.expect_ident()?;
+        self.expect(Token::LParen)?;
+        let mut columns = Vec::new();
+        loop {
+            let col = self.expect_ident()?;
+            if col == "id" {
+                return Err(Scottatura::ReservedIdColumn);
+            }
+            columns.push(col);
+            if self.check(&Token::Comma) { self.advance(); continue; }
+            break;
+        }
+        self.expect(Token::RParen)?;
+        self.expect(Token::Portions)?;
+
+        let mut rows = Vec::new();
+        loop {
+            self.expect(Token::LParen)?;
+            let mut row = Vec::new();
+            loop {
+                row.push(self.parse_expr()?);
+                if self.check(&Token::Comma) { self.advance(); continue; }
+                break;
+            }
+            self.expect(Token::RParen)?;
+            if row.len() != columns.len() {
+                return Err(Scottatura::ValueCountMismatch { got: row.len(), expected: columns.len() });
+            }
+            rows.push(row);
+            if self.check(&Token::Comma) { self.advance(); continue; }
+            break;
+        }
+        Ok(Statement::Insert { table, columns, rows })
+    }
+
+    fn parse_update(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Season)?;
+        let table = self.expect_ident()?;
+        self.expect(Token::Set)?;
+        let mut assignments = Vec::new();
+        loop {
+            let col = self.expect_ident()?;
+            self.expect(Token::Eq)?;
+            let value = self.parse_expr()?;
+            assignments.push((col, value));
+            if self.check(&Token::Comma) { self.advance(); continue; }
+            break;
+        }
+        if !self.check(&Token::Strained) {
+            return Err(Scottatura::SeasonRequiresFilter);
+        }
+        self.advance();
+        self.expect(Token::By)?;
+        let filter = self.parse_expr()?;
+        Ok(Statement::Update { table, assignments, filter })
+    }
+
+    fn parse_delete(&mut self) -> Result<Statement, Scottatura> {
+        self.expect(Token::Discard)?;
+        self.expect(Token::From)?;
+        let table = self.expect_ident()?;
+        if !self.check(&Token::Strained) {
+            return Err(Scottatura::DiscardRequiresFilter);
+        }
+        self.advance();
+        self.expect(Token::By)?;
+        let filter = self.parse_expr()?;
+        Ok(Statement::Delete { table, filter })
     }
 
     fn parse_create_table(&mut self) -> Result<Statement, Scottatura> {
@@ -794,5 +870,95 @@ mod select_tests {
             }
             other => panic!("expected Select, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod dml_tests {
+    use super::*;
+    use crate::Value;
+
+    fn parse(src: &str) -> Statement {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap()
+    }
+
+    fn parse_err(src: &str) -> Scottatura {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap_err()
+    }
+
+    #[test]
+    fn test_parse_insert_single_row() {
+        let stmt = parse("LADLE INTO orders (user_id, total) PORTIONS (1, 49.99);");
+        assert_eq!(stmt, Statement::Insert {
+            table: "orders".into(),
+            columns: vec!["user_id".into(), "total".into()],
+            rows: vec![vec![
+                Expr::Literal(Value::Integer(1)),
+                Expr::Literal(Value::Real(49.99)),
+            ]],
+        });
+    }
+
+    #[test]
+    fn test_parse_insert_multi_row() {
+        let stmt = parse("LADLE INTO t (a) PORTIONS (1), (2), (3);");
+        match stmt {
+            Statement::Insert { rows, .. } => assert_eq!(rows.len(), 3),
+            other => panic!("expected Insert, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_insert_rejects_id_column() {
+        let err = parse_err("LADLE INTO t (id, a) PORTIONS (1, 2);");
+        assert!(matches!(err, Scottatura::ReservedIdColumn));
+    }
+
+    #[test]
+    fn test_parse_insert_rejects_value_count_mismatch() {
+        let err = parse_err("LADLE INTO t (a, b) PORTIONS (1);");
+        assert!(matches!(err, Scottatura::ValueCountMismatch { got: 1, expected: 2 }));
+    }
+
+    #[test]
+    fn test_parse_update() {
+        let stmt = parse("SEASON users SET total = 59.99 STRAINED BY id = 1;");
+        match stmt {
+            Statement::Update { table, assignments, filter } => {
+                assert_eq!(table, "users");
+                assert_eq!(assignments, vec![("total".to_string(), Expr::Literal(Value::Real(59.99)))]);
+                assert!(matches!(filter, Expr::BinaryOp { .. }));
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_update_rejects_missing_strained_by() {
+        let err = parse_err("SEASON users SET total = 59.99;");
+        assert!(matches!(err, Scottatura::SeasonRequiresFilter));
+    }
+
+    #[test]
+    fn test_parse_delete() {
+        let stmt = parse("DISCARD FROM users STRAINED BY age < 18;");
+        assert_eq!(stmt, Statement::Delete {
+            table: "users".into(),
+            filter: Expr::BinaryOp {
+                op: BinOp::Lt,
+                left: Box::new(Expr::Column { qualifier: None, name: "age".into() }),
+                right: Box::new(Expr::Literal(Value::Integer(18))),
+            },
+        });
+    }
+
+    #[test]
+    fn test_parse_delete_rejects_missing_strained_by() {
+        let err = parse_err("DISCARD FROM users;");
+        assert!(matches!(err, Scottatura::DiscardRequiresFilter));
     }
 }
