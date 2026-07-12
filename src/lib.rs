@@ -80,4 +80,7 @@ pub enum Scottatura {
 
     #[error("Scottatura [TIPO_004]: Invalid literal `{literal}` for type {type_name}.")]
     InvalidLiteral { literal: String, type_name: String },
+
+    #[error("Scottatura [PARSE_003]: Sub-serves are not supported in v1.")]
+    SubServeNotSupported,
 }
