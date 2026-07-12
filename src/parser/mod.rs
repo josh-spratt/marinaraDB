@@ -1,7 +1,7 @@
 pub mod ast;
 pub mod lexer;
 
-use ast::{BinOp, ColumnSpec, Expr, Statement};
+use ast::{BinOp, ColumnSpec, Expr, JoinClause, OrderByItem, SelectItem, SelectStatement, Statement, TableRef};
 use lexer::Token;
 use crate::{Scottatura, Value};
 
@@ -21,6 +21,12 @@ impl Parser {
 
     fn peek_pos(&self) -> usize {
         self.tokens[self.pos].1
+    }
+
+    /// Peeks `offset` tokens ahead of the current position, clamped to the last token (Eof).
+    fn peek_at(&self, offset: usize) -> &Token {
+        let idx = (self.pos + offset).min(self.tokens.len() - 1);
+        &self.tokens[idx].0
     }
 
     fn advance(&mut self) -> Token {
@@ -51,7 +57,6 @@ impl Parser {
         }
     }
 
-    #[allow(dead_code)] // consumed by parse_select in Task 5
     fn parse_int_literal(&mut self) -> Result<i64, Scottatura> {
         match self.peek().clone() {
             Token::IntLiteral(n) => { self.advance(); Ok(n) }
@@ -224,6 +229,7 @@ impl Parser {
             Token::Toss => self.parse_drop_table(),
             Token::Strain => self.parse_create_index(),
             Token::Remove => self.parse_drop_index(),
+            Token::Serve => self.parse_select().map(Statement::Select),
             other => Err(Scottatura::UnexpectedToken { token: format!("{other:?}"), pos: self.peek_pos() }),
         }
     }
@@ -289,10 +295,150 @@ impl Parser {
         let index_name = self.expect_ident()?;
         Ok(Statement::DropIndex { index_name })
     }
+
+    fn parse_select(&mut self) -> Result<SelectStatement, Scottatura> {
+        self.expect(Token::Serve)?;
+        let items = self.parse_select_items()?;
+        self.expect(Token::From)?;
+        let from = self.parse_table_ref()?;
+
+        if let Token::Ident(w) = self.peek().clone() {
+            if is_outer_join_modifier(&w) {
+                return Err(Scottatura::OuterTossNotSupported);
+            }
+        }
+
+        let mut join = None;
+        if self.check(&Token::Toss) {
+            self.advance();
+            let table = self.parse_table_ref()?;
+            self.expect(Token::On)?;
+            let left_col = self.parse_qualified_column()?;
+            if !self.check(&Token::Eq) {
+                return Err(Scottatura::NonEquiJoinNotSupported);
+            }
+            self.advance();
+            let right_col = self.parse_qualified_column()?;
+            join = Some(JoinClause { table, left_col, right_col });
+            if self.check(&Token::Toss) {
+                return Err(Scottatura::MultipleTossNotSupported);
+            }
+        }
+
+        let filter = if self.check(&Token::Strained) {
+            self.advance();
+            self.expect(Token::By)?;
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
+        let mut group_by = Vec::new();
+        if self.check(&Token::Bundled) {
+            self.advance();
+            self.expect(Token::By)?;
+            loop {
+                group_by.push(self.expect_ident()?);
+                if self.check(&Token::Comma) { self.advance(); continue; }
+                break;
+            }
+        }
+
+        if matches!(self.peek(), Token::Having) {
+            return Err(Scottatura::HavingNotSupported);
+        }
+
+        let mut order_by = Vec::new();
+        if self.check(&Token::Arranged) {
+            self.advance();
+            self.expect(Token::By)?;
+            loop {
+                let column = self.expect_ident()?;
+                let mut descending = false;
+                if self.check(&Token::Desc) { self.advance(); descending = true; }
+                else if self.check(&Token::Asc) { self.advance(); }
+                order_by.push(OrderByItem { column, descending });
+                if self.check(&Token::Comma) { self.advance(); continue; }
+                break;
+            }
+        }
+
+        let mut limit = None;
+        let mut offset = None;
+        if self.check(&Token::Only) {
+            self.advance();
+            limit = Some(self.parse_int_literal()?);
+            if self.check(&Token::Skip) {
+                self.advance();
+                offset = Some(self.parse_int_literal()?);
+            }
+        } else if self.check(&Token::Skip) {
+            return Err(Scottatura::SkipWithoutOnly);
+        }
+
+        Ok(SelectStatement { items, from, join, filter, group_by, order_by, limit, offset })
+    }
+
+    fn parse_select_items(&mut self) -> Result<Vec<SelectItem>, Scottatura> {
+        if self.check(&Token::Star) {
+            self.advance();
+            return Ok(vec![SelectItem::Star]);
+        }
+        let mut items = Vec::new();
+        loop {
+            let expr = self.parse_expr()?;
+            let alias = if self.check(&Token::As) {
+                self.advance();
+                Some(self.expect_ident()?)
+            } else {
+                None
+            };
+            items.push(SelectItem::Expr { expr, alias });
+            if self.check(&Token::Comma) { self.advance(); continue; }
+            break;
+        }
+        Ok(items)
+    }
+
+    fn parse_table_ref(&mut self) -> Result<TableRef, Scottatura> {
+        let name = self.expect_ident()?;
+        let alias = if self.check(&Token::As) {
+            self.advance();
+            Some(self.expect_ident()?)
+        } else if let Token::Ident(a) = self.peek().clone() {
+            // Don't swallow `LEFT` / `RIGHT` / `FULL` as an implicit alias when it's
+            // actually introducing an (unsupported) outer TOSS — leave it unconsumed
+            // so the outer-join check in `parse_select` can see it and reject it.
+            if is_outer_join_modifier(&a) && self.peek_at(1) == &Token::Toss {
+                None
+            } else {
+                self.advance();
+                Some(a)
+            }
+        } else {
+            None
+        };
+        Ok(TableRef { name, alias })
+    }
+
+    fn parse_qualified_column(&mut self) -> Result<(Option<String>, String), Scottatura> {
+        let first = self.expect_ident()?;
+        if self.check(&Token::Dot) {
+            self.advance();
+            let col = self.expect_ident()?;
+            Ok((Some(first), col))
+        } else {
+            Ok((None, first))
+        }
+    }
 }
 
 fn is_aggregate_fn(name: &str) -> bool {
     matches!(name.to_ascii_uppercase().as_str(), "COUNT" | "SUM" | "MIN" | "MAX" | "AVG")
+}
+
+fn is_outer_join_modifier(word: &str) -> bool {
+    matches!(word.to_ascii_lowercase().as_str(), "left" | "right" | "full")
 }
 
 #[cfg(test)]
@@ -508,5 +654,145 @@ mod ddl_tests {
     fn test_parse_drop_index() {
         let stmt = parse("REMOVE STRAINER idx_age;");
         assert_eq!(stmt, Statement::DropIndex { index_name: "idx_age".into() });
+    }
+}
+
+#[cfg(test)]
+mod select_tests {
+    use super::*;
+    use crate::Value;
+
+    fn parse(src: &str) -> Statement {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap()
+    }
+
+    fn parse_err(src: &str) -> Scottatura {
+        let tokens = lexer::tokenize(src).unwrap();
+        let mut p = Parser::new(tokens);
+        p.parse_stmt().unwrap_err()
+    }
+
+    #[test]
+    fn test_parse_select_star() {
+        let stmt = parse("SERVE * FROM users;");
+        match stmt {
+            Statement::Select(s) => {
+                assert_eq!(s.items, vec![ast::SelectItem::Star]);
+                assert_eq!(s.from, ast::TableRef { name: "users".into(), alias: None });
+                assert!(s.join.is_none());
+                assert!(s.filter.is_none());
+            }
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_strained_by() {
+        let stmt = parse("SERVE name, age FROM users STRAINED BY age > 30;");
+        match stmt {
+            Statement::Select(s) => {
+                assert!(s.filter.is_some());
+                assert_eq!(s.items.len(), 2);
+            }
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_with_toss_join() {
+        let stmt = parse("SERVE u.name, o.total FROM users u TOSS orders o ON u.id = o.user_id;");
+        match stmt {
+            Statement::Select(s) => {
+                let join = s.join.expect("expected join");
+                assert_eq!(join.table, ast::TableRef { name: "orders".into(), alias: Some("o".into()) });
+                assert_eq!(join.left_col, (Some("u".into()), "id".into()));
+                assert_eq!(join.right_col, (Some("o".into()), "user_id".into()));
+            }
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_rejects_second_toss() {
+        let err = parse_err("SERVE * FROM a TOSS b ON a.id = b.id TOSS c ON a.id = c.id;");
+        assert!(matches!(err, Scottatura::MultipleTossNotSupported));
+    }
+
+    #[test]
+    fn test_parse_select_rejects_outer_toss() {
+        let err = parse_err("SERVE * FROM a LEFT TOSS b ON a.id = b.id;");
+        assert!(matches!(err, Scottatura::OuterTossNotSupported));
+    }
+
+    #[test]
+    fn test_parse_select_rejects_non_equi_join() {
+        let err = parse_err("SERVE * FROM a TOSS b ON a.id > b.id;");
+        assert!(matches!(err, Scottatura::NonEquiJoinNotSupported));
+    }
+
+    #[test]
+    fn test_parse_select_with_arranged_by_and_only() {
+        let stmt = parse("SERVE * FROM users ARRANGED BY age DESC, name ONLY 10 SKIP 5;");
+        match stmt {
+            Statement::Select(s) => {
+                assert_eq!(s.order_by, vec![
+                    ast::OrderByItem { column: "age".into(), descending: true },
+                    ast::OrderByItem { column: "name".into(), descending: false },
+                ]);
+                assert_eq!(s.limit, Some(10));
+                assert_eq!(s.offset, Some(5));
+            }
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_rejects_skip_without_only() {
+        let err = parse_err("SERVE * FROM users SKIP 5;");
+        assert!(matches!(err, Scottatura::SkipWithoutOnly));
+    }
+
+    #[test]
+    fn test_parse_select_with_bundled_by() {
+        let stmt = parse("SERVE age, COUNT(*) FROM users BUNDLED BY age;");
+        match stmt {
+            Statement::Select(s) => assert_eq!(s.group_by, vec!["age".to_string()]),
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_rejects_having() {
+        let err = parse_err("SERVE age FROM users BUNDLED BY age HAVING age > 1;");
+        assert!(matches!(err, Scottatura::HavingNotSupported));
+    }
+
+    #[test]
+    fn test_parse_select_item_alias() {
+        let stmt = parse("SERVE total * 2 AS doubled FROM orders;");
+        match stmt {
+            Statement::Select(s) => match &s.items[0] {
+                ast::SelectItem::Expr { alias, .. } => assert_eq!(alias.as_deref(), Some("doubled")),
+                other => panic!("expected Expr item, got {other:?}"),
+            },
+            other => panic!("expected Select, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_select_literal_in_filter() {
+        let stmt = parse("SERVE * FROM t STRAINED BY x = 'y';");
+        match stmt {
+            Statement::Select(s) => {
+                assert_eq!(s.filter, Some(ast::Expr::BinaryOp {
+                    op: ast::BinOp::Eq,
+                    left: Box::new(ast::Expr::Column { qualifier: None, name: "x".into() }),
+                    right: Box::new(ast::Expr::Literal(Value::Text("y".into()))),
+                }));
+            }
+            other => panic!("expected Select, got {other:?}"),
+        }
     }
 }

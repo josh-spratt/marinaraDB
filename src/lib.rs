@@ -92,4 +92,19 @@ pub enum Scottatura {
 
     #[error("Scottatura [RICETTA_006]: Column `id` is reserved for the Al Dente Key; remove it from the column list.")]
     ReservedIdColumn,
+
+    #[error("Scottatura [PARSE_005]: LEFT / RIGHT / FULL TOSS is not supported in v1; use TOSS (inner equi-join).")]
+    OuterTossNotSupported,
+
+    #[error("Scottatura [PARSE_006]: Only equi-joins (ON a.col = b.col) are supported.")]
+    NonEquiJoinNotSupported,
+
+    #[error("Scottatura [PARSE_009]: SKIP without ONLY is not supported.")]
+    SkipWithoutOnly,
+
+    #[error("Scottatura [PARSE_010]: HAVING is not supported in v1.")]
+    HavingNotSupported,
+
+    #[error("Scottatura [PARSE_011]: At most one TOSS per serve is supported in v1.")]
+    MultipleTossNotSupported,
 }
