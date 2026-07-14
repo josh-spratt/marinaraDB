@@ -2,8 +2,6 @@ use std::cmp::Ordering;
 use crate::parser::ast::{BinOp, Expr};
 use crate::{ColType, ColumnDef, Scottatura, Value};
 
-// Currently exercised only by tests below; intended for Task 5 executor use.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tri {
     True,
@@ -12,17 +10,14 @@ pub(crate) enum Tri {
 }
 
 impl Tri {
-    #[allow(dead_code)]
     pub(crate) fn is_true(&self) -> bool {
         matches!(self, Tri::True)
     }
 
-    #[allow(dead_code)]
     fn from_bool(b: bool) -> Tri {
         if b { Tri::True } else { Tri::False }
     }
 
-    #[allow(dead_code)]
     fn not(&self) -> Tri {
         match self {
             Tri::True => Tri::False,
@@ -31,7 +26,6 @@ impl Tri {
         }
     }
 
-    #[allow(dead_code)]
     fn and(&self, other: Tri) -> Tri {
         match (self, other) {
             (Tri::False, _) | (_, Tri::False) => Tri::False,
@@ -40,7 +34,6 @@ impl Tri {
         }
     }
 
-    #[allow(dead_code)]
     fn or(&self, other: Tri) -> Tri {
         match (self, other) {
             (Tri::True, _) | (_, Tri::True) => Tri::True,
@@ -50,8 +43,6 @@ impl Tri {
     }
 }
 
-// Intended for Task 5 executor use.
-#[allow(dead_code)]
 pub(crate) fn full_schema(cols: &[ColumnDef]) -> Vec<ColumnDef> {
     let mut out = vec![ColumnDef {
         name: "id".to_string(),
@@ -63,22 +54,18 @@ pub(crate) fn full_schema(cols: &[ColumnDef]) -> Vec<ColumnDef> {
     out
 }
 
-// Intended for Task 5 executor use.
-#[allow(dead_code)]
 pub(crate) fn full_row(key: i64, values: &[Value]) -> Vec<Value> {
     let mut out = vec![Value::Integer(key)];
     out.extend(values.iter().cloned());
     out
 }
 
-#[allow(dead_code)]
 fn column_value(name: &str, row: &[Value], schema: &[ColumnDef]) -> Result<Value, Scottatura> {
     schema.iter().position(|c| c.name == name)
         .map(|i| row[i].clone())
         .ok_or_else(|| Scottatura::ColumnNotFound { col: name.to_string(), name: "?".to_string() })
 }
 
-#[allow(dead_code)]
 fn values_equal(l: &Value, r: &Value) -> Result<bool, Scottatura> {
     match (l, r) {
         (Value::Integer(a), Value::Integer(b)) => Ok(a == b),
@@ -93,7 +80,6 @@ fn values_equal(l: &Value, r: &Value) -> Result<bool, Scottatura> {
     }
 }
 
-#[allow(dead_code)]
 fn compare_values(l: &Value, r: &Value) -> Result<Ordering, Scottatura> {
     match (l, r) {
         (Value::Integer(a), Value::Integer(b)) => Ok(a.cmp(b)),
@@ -113,7 +99,6 @@ fn compare_values(l: &Value, r: &Value) -> Result<Ordering, Scottatura> {
     }
 }
 
-#[allow(dead_code)]
 fn like_match(text: &str, pattern: &str) -> bool {
     fn rec(t: &[u8], p: &[u8]) -> bool {
         match p.first() {
@@ -126,7 +111,6 @@ fn like_match(text: &str, pattern: &str) -> bool {
     rec(text.as_bytes(), pattern.as_bytes())
 }
 
-#[allow(dead_code)]
 fn eval_arith(op: &BinOp, l: Value, r: Value) -> Result<Value, Scottatura> {
     if matches!(l, Value::Null) || matches!(r, Value::Null) {
         return Ok(Value::Null);
@@ -160,8 +144,6 @@ fn eval_arith(op: &BinOp, l: Value, r: Value) -> Result<Value, Scottatura> {
     })
 }
 
-// Intended for Task 5 executor use.
-#[allow(dead_code)]
 pub(crate) fn eval_scalar(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> Result<Value, Scottatura> {
     match expr {
         Expr::Literal(v) => Ok(v.clone()),
@@ -176,8 +158,6 @@ pub(crate) fn eval_scalar(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> R
     }
 }
 
-// Intended for Task 5 executor use.
-#[allow(dead_code)]
 pub(crate) fn eval_tri(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> Result<Tri, Scottatura> {
     match expr {
         Expr::BinaryOp { op: BinOp::And, left, right } => {
@@ -246,6 +226,218 @@ pub(crate) fn eval_tri(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> Resu
             Ok(Tri::False)
         }
         _ => Err(Scottatura::ClauseNotYetSupported { clause: "non-boolean expression in filter position".to_string() }),
+    }
+}
+
+use crate::parser::ast::SelectItem;
+use crate::sous_chef::Plan;
+use crate::stove::pot::Pot;
+use crate::ResultSet;
+
+fn project(items: &[SelectItem], schema: &[ColumnDef], row: &[Value]) -> Result<(Vec<String>, Vec<Value>), Scottatura> {
+    let mut names = Vec::new();
+    let mut vals = Vec::new();
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            SelectItem::Star => {
+                for col in schema {
+                    names.push(col.name.clone());
+                    vals.push(column_value(&col.name, row, schema)?);
+                }
+            }
+            SelectItem::Expr { expr, alias } => {
+                let name = alias.clone().unwrap_or_else(|| match expr {
+                    Expr::Column { name, .. } => name.clone(),
+                    _ => format!("expr{}", i + 1),
+                });
+                names.push(name);
+                vals.push(eval_scalar(expr, row, schema)?);
+            }
+        }
+    }
+    Ok((names, vals))
+}
+
+fn resolve_insert_values(table: &str, table_cols: &[ColumnDef], columns: &[String], row_exprs: &[Expr]) -> Result<Vec<Value>, Scottatura> {
+    for name in columns {
+        if !table_cols.iter().any(|c| &c.name == name) {
+            return Err(Scottatura::ColumnNotFound { col: name.clone(), name: table.to_string() });
+        }
+    }
+    let mut by_name: std::collections::HashMap<&str, Value> = std::collections::HashMap::new();
+    for (name, expr) in columns.iter().zip(row_exprs.iter()) {
+        by_name.insert(name.as_str(), eval_scalar(expr, &[], &[])?);
+    }
+    Ok(table_cols.iter().map(|col| by_name.remove(col.name.as_str()).unwrap_or(Value::Null)).collect())
+}
+
+// Currently exercised only by tests below; intended for Task 6 (main.rs wiring) to call.
+#[allow(dead_code)]
+pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura> {
+    match plan {
+        Plan::CreateTable { name, columns } => {
+            let cols = columns.into_iter().map(|c| ColumnDef {
+                name: c.name, col_type: c.col_type, nullable: !c.not_null, strainer_root: None,
+            }).collect();
+            pot.create_table(&name, cols)?;
+            Ok(ResultSet::default())
+        }
+        Plan::DropTable { name } => {
+            pot.drop_table(&name)?;
+            Ok(ResultSet::default())
+        }
+        Plan::Insert { table, columns, rows } => {
+            let recipe = pot.recipe(&table)?;
+            let mut last_key = None;
+            let n = rows.len();
+            for row_exprs in &rows {
+                let values = resolve_insert_values(&table, &recipe.columns, &columns, row_exprs)?;
+                last_key = Some(pot.insert_strand(&table, values)?);
+            }
+            Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
+        }
+        Plan::SeqScan { table, columns, filter } => {
+            let recipe = pot.recipe(&table)?;
+            let schema = full_schema(&recipe.columns);
+            let raw_rows = pot.scan_noodle(&table)?;
+            let mut out_names = Vec::new();
+            let mut out_rows = Vec::new();
+            for (key, values) in raw_rows {
+                let row = full_row(key, &values);
+                if let Some(f) = &filter {
+                    if !eval_tri(f, &row, &schema)?.is_true() {
+                        continue;
+                    }
+                }
+                let (names, vals) = project(&columns, &schema, &row)?;
+                out_names = names;
+                out_rows.push(vals);
+            }
+            let n = out_rows.len() as u64;
+            Ok(ResultSet { columns: out_names, rows: out_rows, affected_rows: n, last_insert_key: None })
+        }
+        Plan::Update { table, assignments, filter } => {
+            let recipe = pot.recipe(&table)?;
+            let schema = full_schema(&recipe.columns);
+            for (name, _) in &assignments {
+                if name == "id" {
+                    return Err(Scottatura::AlDenteKeyNotUpdatable);
+                }
+            }
+            let raw_rows = pot.scan_noodle(&table)?;
+            let mut affected = 0u64;
+            for (key, values) in raw_rows {
+                let row = full_row(key, &values);
+                if !eval_tri(&filter, &row, &schema)?.is_true() {
+                    continue;
+                }
+                let mut new_values = values.clone();
+                for (name, expr) in &assignments {
+                    let idx = recipe.columns.iter().position(|c| &c.name == name)
+                        .ok_or_else(|| Scottatura::ColumnNotFound { col: name.clone(), name: table.clone() })?;
+                    new_values[idx] = eval_scalar(expr, &row, &schema)?;
+                }
+                pot.delete_by_key(&table, key)?;
+                pot.insert_with_key(&table, key, &new_values)?;
+                affected += 1;
+            }
+            Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: affected, last_insert_key: None })
+        }
+        Plan::Delete { table, filter } => {
+            let recipe = pot.recipe(&table)?;
+            let schema = full_schema(&recipe.columns);
+            let raw_rows = pot.scan_noodle(&table)?;
+            let mut affected = 0u64;
+            for (key, values) in raw_rows {
+                let row = full_row(key, &values);
+                if !eval_tri(&filter, &row, &schema)?.is_true() {
+                    continue;
+                }
+                pot.delete_by_key(&table, key)?;
+                affected += 1;
+            }
+            Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: affected, last_insert_key: None })
+        }
+    }
+}
+
+#[cfg(test)]
+mod execute_tests {
+    use super::*;
+    use crate::sous_chef::plan;
+    use crate::parser::parse_statement;
+
+    fn temp_pot() -> Pot {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        drop(f);
+        std::fs::remove_file(&path).ok();
+        Pot::open(&path).unwrap()
+    }
+
+    fn run(pot: &mut Pot, sql: &str) -> Result<ResultSet, Scottatura> {
+        execute(plan(parse_statement(sql).unwrap()).unwrap(), pot)
+    }
+
+    #[test]
+    fn test_create_insert_serve() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT, age INT);").unwrap();
+        let r = run(&mut pot, "LADLE INTO users (name, age) PORTIONS ('Tony', 38);").unwrap();
+        assert_eq!(r.last_insert_key, Some(1));
+        let r = run(&mut pot, "SERVE * FROM users STRAINED BY age = 38;").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.columns, vec!["id", "name", "age"]);
+    }
+
+    #[test]
+    fn test_insert_with_partial_columns_defaults_to_vuoto() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT, age INT);").unwrap();
+        run(&mut pot, "LADLE INTO users (name) PORTIONS ('Tony');").unwrap();
+        let r = run(&mut pot, "SERVE * FROM users;").unwrap();
+        assert_eq!(r.rows[0][2], Value::Null);
+    }
+
+    #[test]
+    fn test_update_moves_row_keeping_key() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT, age INT);").unwrap();
+        run(&mut pot, "LADLE INTO users (name, age) PORTIONS ('Tony', 38);").unwrap();
+        run(&mut pot, "SEASON users SET age = 39 STRAINED BY name = 'Tony';").unwrap();
+        let r = run(&mut pot, "SERVE * FROM users;").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0][0], Value::Integer(1)); // same id
+        assert_eq!(r.rows[0][2], Value::Integer(39));
+    }
+
+    #[test]
+    fn test_update_id_rejected() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT, age INT);").unwrap();
+        run(&mut pot, "LADLE INTO users (name, age) PORTIONS ('Tony', 38);").unwrap();
+        let err = run(&mut pot, "SEASON users SET id = 5 STRAINED BY name = 'Tony';").unwrap_err();
+        assert!(matches!(err, Scottatura::AlDenteKeyNotUpdatable));
+    }
+
+    #[test]
+    fn test_delete_removes_matching_row() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT, age INT);").unwrap();
+        run(&mut pot, "LADLE INTO users (name, age) PORTIONS ('Tony', 38), ('Maria', 12);").unwrap();
+        let r = run(&mut pot, "DISCARD FROM users STRAINED BY age < 18;").unwrap();
+        assert_eq!(r.affected_rows, 1);
+        let r = run(&mut pot, "SERVE * FROM users;").unwrap();
+        assert_eq!(r.rows.len(), 1);
+        assert_eq!(r.rows[0][1], Value::Text("Tony".to_string()));
+    }
+
+    #[test]
+    fn test_drop_table() {
+        let mut pot = temp_pot();
+        run(&mut pot, "PLATE noodle users (name TEXT);").unwrap();
+        run(&mut pot, "TOSS OUT noodle users;").unwrap();
+        assert!(pot.noodles().is_empty());
     }
 }
 

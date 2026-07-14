@@ -76,10 +76,6 @@ impl Pot {
         Ok(key)
     }
 
-    // Currently exercised only by tests below; intended for future executor use
-    // (e.g. UPDATE/re-insert paths) that will call these with key-invariant checks
-    // already performed by the caller.
-    #[allow(dead_code)]
     pub(crate) fn insert_with_key(&mut self, noodle: &str, key: i64, values: &[Value]) -> Result<(), Scottatura> {
         let entry = self.entry(noodle)?;
         let row_bytes = encode_and_validate(&entry, key, values)?;
@@ -91,8 +87,6 @@ impl Pot {
         self.heap_chain_scan(entry.root_heap_page, &entry.cols)
     }
 
-    // Currently exercised only by tests below; intended for future executor use.
-    #[allow(dead_code)]
     pub(crate) fn delete_by_key(&mut self, noodle: &str, key: i64) -> Result<bool, Scottatura> {
         let entry = self.entry(noodle)?;
         self.heap_chain_delete(entry.root_heap_page, key, &entry.cols)
@@ -139,7 +133,6 @@ impl Pot {
         Ok(rows)
     }
 
-    #[allow(dead_code)]
     fn heap_chain_delete(&mut self, root_page: u64, key: i64, cols: &[ColumnDef]) -> Result<bool, Scottatura> {
         let mut page_num = root_page;
         loop {
