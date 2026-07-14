@@ -6,7 +6,7 @@ pub fn encode_row(al_dente_key: i64, values: &[Value], cols: &[ColumnDef]) -> Re
     let mut out = Vec::new();
     out.extend_from_slice(&al_dente_key.to_le_bytes());
 
-    let bitmap_bytes = (cols.len() + 7) / 8;
+    let bitmap_bytes = cols.len().div_ceil(8);
     let mut bitmap = vec![0u8; bitmap_bytes];
     for (i, val) in values.iter().enumerate() {
         if matches!(val, Value::Null) {
@@ -23,7 +23,7 @@ pub fn encode_row(al_dente_key: i64, values: &[Value], cols: &[ColumnDef]) -> Re
 
 pub fn decode_row(data: &[u8], cols: &[ColumnDef]) -> (i64, Vec<Value>) {
     let key = i64::from_le_bytes(data[0..8].try_into().unwrap());
-    let bitmap_bytes = (cols.len() + 7) / 8;
+    let bitmap_bytes = cols.len().div_ceil(8);
     let bitmap = &data[8..8 + bitmap_bytes];
     let mut cursor = 8 + bitmap_bytes;
 
