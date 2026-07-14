@@ -119,4 +119,16 @@ pub enum Scottatura {
 
     #[error("Scottatura [PARSE_002]: Statement type not supported.")]
     StatementNotSupported,
+
+    #[error("Scottatura [RICETTA_005]: Cannot update the Al Dente Key (`id`) column.")]
+    AlDenteKeyNotUpdatable,
+
+    #[error("Scottatura [EXEC_001]: `{clause}` is not supported yet — planned for a later phase.")]
+    ClauseNotYetSupported { clause: String },
+
+    #[error("Scottatura [EXEC_002]: Simmer transactions (BEGIN/FINISH/SPILL) are not executable yet; only single-statement autocommit is supported.")]
+    TransactionNotSupported,
+
+    #[error("Scottatura [EXEC_003]: Strainer indexes (STRAIN / REMOVE STRAINER) are not supported yet.")]
+    StrainerNotSupported,
 }

@@ -24,6 +24,7 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 | Transaction | `SIMMER_` | Misuse of BEGIN / COMMIT / ROLLBACK |
 | Storage | `STOVE_` | I/O errors, checksum failures, corrupt pages |
 | Lock | `LOCK_` | Timeout waiting for exclusive lock |
+| Execution | `EXEC_` | Statement is parsed correctly but not yet executable (deferred feature) |
 
 ## Parse Errors (PARSE_)
 
@@ -96,6 +97,14 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 | Code | Message |
 |---|---|
 | `LOCK_001` | Simmer timed out after {ms}ms waiting for exclusive lock; rolled back. |
+
+## Execution Errors (EXEC_)
+
+| Code | Message |
+|---|---|
+| `EXEC_001` | `{clause}` is not supported yet — planned for a later phase. |
+| `EXEC_002` | Simmer transactions (BEGIN/FINISH/SPILL) are not executable yet; only single-statement autocommit is supported. |
+| `EXEC_003` | Strainer indexes (STRAIN / REMOVE STRAINER) are not supported yet. |
 
 ## Rust Error Type
 
