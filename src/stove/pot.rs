@@ -92,6 +92,12 @@ impl Pot {
         self.heap_chain_delete(entry.root_heap_page, key, &entry.cols)
     }
 
+    pub fn execute(&mut self, sauql: &str) -> Result<crate::ResultSet, Scottatura> {
+        let stmt = crate::parser::parse_statement(sauql)?;
+        let plan = crate::sous_chef::plan(stmt)?;
+        crate::stove::executor::execute(plan, self)
+    }
+
     fn heap_chain_insert(&mut self, root_page: u64, row_bytes: &[u8]) -> Result<(), Scottatura> {
         let mut page_num = root_page;
         loop {

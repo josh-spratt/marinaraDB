@@ -271,8 +271,6 @@ fn resolve_insert_values(table: &str, table_cols: &[ColumnDef], columns: &[Strin
     Ok(table_cols.iter().map(|col| by_name.remove(col.name.as_str()).unwrap_or(Value::Null)).collect())
 }
 
-// Currently exercised only by tests below; intended for Task 6 (main.rs wiring) to call.
-#[allow(dead_code)]
 pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura> {
     match plan {
         Plan::CreateTable { name, columns } => {
