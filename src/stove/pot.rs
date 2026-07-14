@@ -76,7 +76,11 @@ impl Pot {
         Ok(key)
     }
 
-    pub fn insert_with_key(&mut self, noodle: &str, key: i64, values: &[Value]) -> Result<(), Scottatura> {
+    // Currently exercised only by tests below; intended for future executor use
+    // (e.g. UPDATE/re-insert paths) that will call these with key-invariant checks
+    // already performed by the caller.
+    #[allow(dead_code)]
+    pub(crate) fn insert_with_key(&mut self, noodle: &str, key: i64, values: &[Value]) -> Result<(), Scottatura> {
         let entry = self.entry(noodle)?;
         let row_bytes = encode_and_validate(&entry, key, values)?;
         self.heap_chain_insert(entry.root_heap_page, &row_bytes)
@@ -87,7 +91,9 @@ impl Pot {
         self.heap_chain_scan(entry.root_heap_page, &entry.cols)
     }
 
-    pub fn delete_by_key(&mut self, noodle: &str, key: i64) -> Result<bool, Scottatura> {
+    // Currently exercised only by tests below; intended for future executor use.
+    #[allow(dead_code)]
+    pub(crate) fn delete_by_key(&mut self, noodle: &str, key: i64) -> Result<bool, Scottatura> {
         let entry = self.entry(noodle)?;
         self.heap_chain_delete(entry.root_heap_page, key, &entry.cols)
     }
@@ -133,6 +139,7 @@ impl Pot {
         Ok(rows)
     }
 
+    #[allow(dead_code)]
     fn heap_chain_delete(&mut self, root_page: u64, key: i64, cols: &[ColumnDef]) -> Result<bool, Scottatura> {
         let mut page_num = root_page;
         loop {
@@ -149,5 +156,60 @@ impl Pot {
             if next == 0 { return Ok(false); }
             page_num = next;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ColType;
+
+    fn temp_path() -> String {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let p = f.path().to_str().unwrap().to_string();
+        drop(f);
+        p
+    }
+
+    #[test]
+    fn test_insert_beyond_one_page_spans_multiple_pages() {
+        let path = temp_path();
+        let mut pot = Pot::open(&path).unwrap();
+        pot.create_table("nums", vec![
+            ColumnDef { name: "n".into(), col_type: ColType::Integer, nullable: false, strainer_root: None },
+        ]).unwrap();
+
+        // Each row is ~17 bytes + an 8-byte slot; a 4KB page holds well under 300.
+        // 500 rows guarantees at least one page split.
+        for i in 0..500 {
+            pot.insert_strand("nums", vec![Value::Integer(i)]).unwrap();
+        }
+
+        let rows = pot.scan_noodle("nums").unwrap();
+        assert_eq!(rows.len(), 500);
+        assert_eq!(rows[0].0, 1);
+        assert_eq!(rows[499].0, 500);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_delete_and_reinsert_across_chain() {
+        let path = temp_path();
+        let mut pot = Pot::open(&path).unwrap();
+        pot.create_table("nums", vec![
+            ColumnDef { name: "n".into(), col_type: ColType::Integer, nullable: false, strainer_root: None },
+        ]).unwrap();
+        for i in 0..500 {
+            pot.insert_strand("nums", vec![Value::Integer(i)]).unwrap();
+        }
+        // Key 500 (the 500th insert, i.e. last_insert_key of the loop's last call) lives on a later page.
+        assert!(pot.delete_by_key("nums", 500).unwrap());
+        assert!(!pot.delete_by_key("nums", 500).unwrap()); // already gone
+
+        pot.insert_with_key("nums", 500, &[Value::Integer(999)]).unwrap();
+        let rows = pot.scan_noodle("nums").unwrap();
+        let reinserted = rows.iter().find(|(k, _)| *k == 500).unwrap();
+        assert_eq!(reinserted.1[0], Value::Integer(999));
+        std::fs::remove_file(&path).ok();
     }
 }
