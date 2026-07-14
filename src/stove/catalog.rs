@@ -75,7 +75,7 @@ impl Catalog {
 
     fn persist(&mut self, tray: &mut WarmingTray, pot: &mut PotFile) -> Result<(), Scottatura> {
         let encoded = bincode::serialize(&self.entries)
-            .map_err(|e| Scottatura::IoError(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+            .map_err(|e| Scottatura::IoError(std::io::Error::other(e)))?;
         if encoded.len() > (PAGE_SIZE - PAGE_HEADER_SIZE - 4) {
             return Err(Scottatura::IoError(std::io::Error::other(
                 "catalog too large for single page",

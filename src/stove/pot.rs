@@ -1,6 +1,7 @@
 use crate::{ColumnDef, Recipe, Scottatura, Value};
-use crate::stove::catalog::Catalog;
-use crate::stove::heap::{encode_row, heap_insert, heap_scan};
+use crate::stove::catalog::{Catalog, NoodleEntry};
+use crate::stove::heap::{encode_row, heap_delete, heap_insert, heap_scan};
+use crate::stove::page::PageType;
 use crate::stove::pot_file::PotFile;
 use crate::warming_tray::WarmingTray;
 
@@ -9,6 +10,15 @@ pub struct Pot {
     tray: WarmingTray,
     catalog: Catalog,
     next_key: i64,
+}
+
+fn encode_and_validate(entry: &NoodleEntry, key: i64, values: &[Value]) -> Result<Vec<u8>, Scottatura> {
+    for (val, col) in values.iter().zip(entry.cols.iter()) {
+        if matches!(val, Value::Null) && !col.nullable {
+            return Err(Scottatura::NullConstraintViolation { col: col.name.clone() });
+        }
+    }
+    encode_row(key, values, &entry.cols)
 }
 
 impl Pot {
@@ -46,47 +56,98 @@ impl Pot {
         self.catalog.drop_noodle(name, &mut self.tray, &mut self.pot_file)
     }
 
+    fn entry(&self, noodle: &str) -> Result<NoodleEntry, Scottatura> {
+        self.catalog.get_recipe(noodle)
+            .cloned()
+            .ok_or_else(|| Scottatura::NoodleNotFound { name: noodle.to_string() })
+    }
+
     pub fn insert_strand(&mut self, noodle: &str, values: Vec<Value>) -> Result<i64, Scottatura> {
-        let entry = self.catalog.get_recipe(noodle)
-            .ok_or_else(|| Scottatura::NoodleNotFound { name: noodle.to_string() })?
-            .clone();
+        let entry = self.entry(noodle)?;
 
         if values.len() != entry.cols.len() {
-            return Err(Scottatura::TypeMismatch {
-                got: format!("{} values", values.len()),
-                col: noodle.to_string(),
-                expected: format!("{} columns", entry.cols.len()),
-            });
-        }
-
-        for (val, col) in values.iter().zip(entry.cols.iter()) {
-            if matches!(val, Value::Null) && !col.nullable {
-                return Err(Scottatura::NullConstraintViolation { col: col.name.clone() });
-            }
+            return Err(Scottatura::ValueCountMismatch { got: values.len(), expected: entry.cols.len() });
         }
 
         let key = self.next_key;
+        let row_bytes = encode_and_validate(&entry, key, &values)?;
+        self.heap_chain_insert(entry.root_heap_page, &row_bytes)?;
         self.next_key += 1;
-        let row_bytes = encode_row(key, &values, &entry.cols)?;
-
-        let page_num = entry.root_heap_page;
-        let page = self.tray.fetch(page_num, &mut self.pot_file)?;
-        if heap_insert(page, &row_bytes).is_none() {
-            return Err(Scottatura::IoError(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "heap page full — multi-page heap implemented in Phase 2",
-            )));
-        }
-        self.tray.mark_dirty(page_num, 0);
-        self.tray.flush_simmer(0, &mut self.pot_file)?;
         Ok(key)
     }
 
+    pub fn insert_with_key(&mut self, noodle: &str, key: i64, values: &[Value]) -> Result<(), Scottatura> {
+        let entry = self.entry(noodle)?;
+        let row_bytes = encode_and_validate(&entry, key, values)?;
+        self.heap_chain_insert(entry.root_heap_page, &row_bytes)
+    }
+
     pub fn scan_noodle(&mut self, noodle: &str) -> Result<Vec<(i64, Vec<Value>)>, Scottatura> {
-        let entry = self.catalog.get_recipe(noodle)
-            .ok_or_else(|| Scottatura::NoodleNotFound { name: noodle.to_string() })?
-            .clone();
-        let page = self.tray.fetch(entry.root_heap_page, &mut self.pot_file)?;
-        Ok(heap_scan(page, &entry.cols))
+        let entry = self.entry(noodle)?;
+        self.heap_chain_scan(entry.root_heap_page, &entry.cols)
+    }
+
+    pub fn delete_by_key(&mut self, noodle: &str, key: i64) -> Result<bool, Scottatura> {
+        let entry = self.entry(noodle)?;
+        self.heap_chain_delete(entry.root_heap_page, key, &entry.cols)
+    }
+
+    fn heap_chain_insert(&mut self, root_page: u64, row_bytes: &[u8]) -> Result<(), Scottatura> {
+        let mut page_num = root_page;
+        loop {
+            let next_page_num = {
+                let page = self.tray.fetch(page_num, &mut self.pot_file)?;
+                if heap_insert(page, row_bytes).is_some() {
+                    self.tray.mark_dirty(page_num, 0);
+                    self.tray.flush_simmer(0, &mut self.pot_file)?;
+                    return Ok(());
+                }
+                page.next_page()
+            };
+            if next_page_num != 0 {
+                page_num = next_page_num;
+                continue;
+            }
+            let new_page = self.pot_file.allocate_page(PageType::Heap)?;
+            let new_page_num = new_page.number;
+            let page = self.tray.fetch(page_num, &mut self.pot_file)?;
+            page.set_next_page(new_page_num);
+            self.tray.mark_dirty(page_num, 0);
+            self.tray.flush_simmer(0, &mut self.pot_file)?;
+            page_num = new_page_num;
+        }
+    }
+
+    fn heap_chain_scan(&mut self, root_page: u64, cols: &[ColumnDef]) -> Result<Vec<(i64, Vec<Value>)>, Scottatura> {
+        let mut rows = Vec::new();
+        let mut page_num = root_page;
+        loop {
+            let (page_rows, next) = {
+                let page = self.tray.fetch(page_num, &mut self.pot_file)?;
+                (heap_scan(page, cols), page.next_page())
+            };
+            rows.extend(page_rows);
+            if next == 0 { break; }
+            page_num = next;
+        }
+        Ok(rows)
+    }
+
+    fn heap_chain_delete(&mut self, root_page: u64, key: i64, cols: &[ColumnDef]) -> Result<bool, Scottatura> {
+        let mut page_num = root_page;
+        loop {
+            let (deleted, next) = {
+                let page = self.tray.fetch(page_num, &mut self.pot_file)?;
+                let deleted = heap_delete(page, key, cols);
+                (deleted, page.next_page())
+            };
+            if deleted {
+                self.tray.mark_dirty(page_num, 0);
+                self.tray.flush_simmer(0, &mut self.pot_file)?;
+                return Ok(true);
+            }
+            if next == 0 { return Ok(false); }
+            page_num = next;
+        }
     }
 }
