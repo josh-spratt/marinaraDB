@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Pot::execute(sauql: &str) -> Result<ResultSet, Scottatura>` — parses, plans, and executes a SaucQL statement end-to-end
+- Sous Chef planner (`sous_chef::plan`) — translates parsed statements into an executable `Plan`, rejecting joins/`ARRANGED BY`/`ONLY`/`SKIP`/`BUNDLED BY`/transactions/Strainer DDL with clear `EXEC_*` errors
+- Stove executor — single-table `SERVE`/`LADLE INTO`/`SEASON`/`DISCARD FROM` with full `STRAINED BY` expression support (comparisons, `AND`/`OR`/`NOT`, `IS VUOTO`, `BETWEEN`, `LIKE`, `IN`, three-valued VUOTO logic, `INTEGER`→`REAL` coercion)
+- Multi-page heap traversal — heap storage now chains across pages via `next_page` instead of capping a table at one page
+- `RICETTA_005`, `EXEC_001`–`EXEC_003` Scottatura error codes
+
 ## [0.1.0] - 2026-06-28
 
 ### Added
