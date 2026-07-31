@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/marinaradb-logo.png" alt="MarinaraDB" width="300" />
+</p>
+
 # MarinaraDB
 
 > *A relational database that's been simmering on the stove all day.*
