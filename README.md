@@ -60,7 +60,7 @@ marinara> PLATE noodle users (name TEXT, age INT);
 marinara> LADLE INTO users (name, age) PORTIONS ('Tony', 38);
 marinara> SERVE * FROM users;
 id | name | age
----+------+----
+---|------|----
 1  | Tony | 38
 marinara> .tables
 users

@@ -117,42 +117,42 @@ pub fn run(pot: &mut crate::Pot, input: impl std::io::BufRead, output: &mut impl
                 let line = line_result?;
                 let trimmed = line.trim();
 
-                // Check for dot-commands
-                if trimmed.starts_with('.') {
-                    if buffer.is_empty() {
-                        // Only recognize dot-commands on a fresh line
-                        match trimmed {
-                            ".tables" => {
-                                let tables = pot.noodles();
-                                if tables.is_empty() {
-                                    writeln!(output, "(no tables)")?;
-                                } else {
-                                    for table in tables {
-                                        writeln!(output, "{}", table)?;
-                                    }
+                // Dot-commands are only recognized on a fresh line (i.e. when
+                // we are not already mid-accumulation of a multi-line
+                // statement). A continuation line that happens to start with
+                // '.' -- e.g. a decimal literal like ".5)" completing a
+                // multi-line INSERT -- must go through the same
+                // append-then-check-for-terminator path as any other
+                // continuation line.
+                if buffer.is_empty() && trimmed.starts_with('.') {
+                    match trimmed {
+                        ".tables" => {
+                            let tables = pot.noodles();
+                            if tables.is_empty() {
+                                writeln!(output, "(no tables)")?;
+                            } else {
+                                for table in tables {
+                                    writeln!(output, "{}", table)?;
                                 }
                             }
-                            ".help" => {
-                                writeln!(output, "MarinaraDB interactive shell commands:")?;
-                                writeln!(output, "  .tables     - List all tables")?;
-                                writeln!(output, "  .help       - Show this help message")?;
-                                writeln!(output, "  .quit/.exit - Exit the shell")?;
-                                writeln!(output, "  ;           - Execute statement")?;
-                            }
-                            ".quit" | ".exit" => {
-                                return Ok(());
-                            }
-                            _ => {
-                                writeln!(output, "Unknown command: {}", trimmed)?;
-                            }
                         }
-                    } else {
-                        // Dot-command in middle of statement accumulation
-                        buffer.push('\n');
-                        buffer.push_str(&line);
+                        ".help" => {
+                            writeln!(output, "MarinaraDB interactive shell commands:")?;
+                            writeln!(output, "  .tables     - List all tables")?;
+                            writeln!(output, "  .help       - Show this help message")?;
+                            writeln!(output, "  .quit/.exit - Exit the shell")?;
+                            writeln!(output, "  ;           - Execute statement")?;
+                        }
+                        ".quit" | ".exit" => {
+                            return Ok(());
+                        }
+                        _ => {
+                            writeln!(output, "Unknown command: {}", trimmed)?;
+                        }
                     }
                 } else {
-                    // Regular SQL line
+                    // Regular SQL line, or a continuation line (possibly
+                    // starting with '.') while mid-statement-accumulation.
                     if !buffer.is_empty() {
                         buffer.push('\n');
                     }
@@ -368,6 +368,55 @@ SERVE * FROM users;
         assert!(output_str.contains("Alice"), "Should show inserted value 'Alice'");
         assert!(output_str.contains("30"), "Should show inserted value 30");
         assert!(output_str.contains("users"), "Should show 'users' table name from .tables");
+
+        // Clean up
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repl_continuation_line_starting_with_dot() -> std::io::Result<()> {
+        use std::io::Cursor;
+
+        let db_path = "/tmp/test_repl_dot_continuation.pot";
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        let mut pot = crate::Pot::open(db_path).expect("Failed to create test pot");
+
+        // A multi-line SELECT whose continuation line starts with '.' (a
+        // qualified-column reference like "prices.cost" split across the
+        // line break) must still be recognized as a continuation of the
+        // buffered statement -- not misdetected as a dot-command -- and must
+        // execute once the terminating ';' shows up on that continuation
+        // line.
+        let input_data = "PLATE noodle prices (item TEXT, cost REAL);\nLADLE INTO prices (item, cost) PORTIONS ('pasta', 4.5);\nSERVE prices\n.cost FROM prices;\n.quit\n";
+
+        let input = Cursor::new(input_data.as_bytes());
+        let mut output = Vec::new();
+
+        run(&mut pot, std::io::BufReader::new(input), &mut output)?;
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            !output_str.contains("Unknown command"),
+            "Continuation line starting with '.' must not be treated as a dot-command, got: {}",
+            output_str
+        );
+        assert!(
+            output_str.contains("cost"),
+            "The multi-line SELECT should have executed, showing the 'cost' column header, got: {}",
+            output_str
+        );
+        assert!(
+            output_str.contains("4.5"),
+            "The multi-line SELECT should have executed and returned the inserted value, got: {}",
+            output_str
+        );
 
         // Clean up
         if std::path::Path::new(db_path).exists() {
