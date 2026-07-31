@@ -50,12 +50,36 @@ All 8 integration tests should pass. They cover create/drop noodle, insert, scan
 
 ## Run the Binary
 
-The CLI is a stub at this stage — it prints a banner and exits:
+Launch an interactive REPL session:
 
 ```sh
 cargo run
 # MarinaraDB v0.1.0 — Buon appetito!
+# Connected to marinara.pot. Type .help for commands, .quit to exit.
+marinara> PLATE noodle users (name TEXT, age INT);
+marinara> LADLE INTO users (name, age) PORTIONS ('Tony', 38);
+marinara> SERVE * FROM users;
+id | name | age
+---|------|----
+1  | Tony | 38
+marinara> .tables
+users
+marinara> .quit
 ```
+
+Or open a specific database file:
+
+```sh
+cargo run -- path/to/db.pot
+```
+
+Commands:
+- End each SaucQL statement with `;` (the parser's statement terminator)
+- `.tables` — list all tables
+- `.help` — show command help
+- `.quit` / `.exit` — exit the shell
+
+Error recovery: if a statement fails to parse or execute, MarinaraDB prints the error and returns to the prompt; the session continues normally.
 
 ## Use the Library
 

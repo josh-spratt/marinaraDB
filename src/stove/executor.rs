@@ -234,15 +234,17 @@ use crate::sous_chef::Plan;
 use crate::stove::pot::Pot;
 use crate::ResultSet;
 
-fn project(items: &[SelectItem], schema: &[ColumnDef], row: &[Value]) -> Result<(Vec<String>, Vec<Value>), Scottatura> {
+/// Resolve the projected column names for a SELECT item list against a table
+/// schema. This does not depend on any particular row, so it can (and should)
+/// be computed once regardless of how many rows match the filter -- including
+/// zero rows.
+fn project_names(items: &[SelectItem], schema: &[ColumnDef]) -> Vec<String> {
     let mut names = Vec::new();
-    let mut vals = Vec::new();
     for (i, item) in items.iter().enumerate() {
         match item {
             SelectItem::Star => {
                 for col in schema {
                     names.push(col.name.clone());
-                    vals.push(column_value(&col.name, row, schema)?);
                 }
             }
             SelectItem::Expr { expr, alias } => {
@@ -251,11 +253,28 @@ fn project(items: &[SelectItem], schema: &[ColumnDef], row: &[Value]) -> Result<
                     _ => format!("expr{}", i + 1),
                 });
                 names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Resolve the projected values for a SELECT item list against a single row.
+fn project_values(items: &[SelectItem], schema: &[ColumnDef], row: &[Value]) -> Result<Vec<Value>, Scottatura> {
+    let mut vals = Vec::new();
+    for item in items {
+        match item {
+            SelectItem::Star => {
+                for col in schema {
+                    vals.push(column_value(&col.name, row, schema)?);
+                }
+            }
+            SelectItem::Expr { expr, .. } => {
                 vals.push(eval_scalar(expr, row, schema)?);
             }
         }
     }
-    Ok((names, vals))
+    Ok(vals)
 }
 
 fn resolve_insert_values(table: &str, table_cols: &[ColumnDef], columns: &[String], row_exprs: &[Expr]) -> Result<Vec<Value>, Scottatura> {
@@ -298,7 +317,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             let recipe = pot.recipe(&table)?;
             let schema = full_schema(&recipe.columns);
             let raw_rows = pot.scan_noodle(&table)?;
-            let mut out_names = Vec::new();
+            let out_names = project_names(&columns, &schema);
             let mut out_rows = Vec::new();
             for (key, values) in raw_rows {
                 let row = full_row(key, &values);
@@ -307,9 +326,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
                         continue;
                     }
                 }
-                let (names, vals) = project(&columns, &schema, &row)?;
-                out_names = names;
-                out_rows.push(vals);
+                out_rows.push(project_values(&columns, &schema, &row)?);
             }
             let n = out_rows.len() as u64;
             Ok(ResultSet { columns: out_names, rows: out_rows, affected_rows: n, last_insert_key: None })

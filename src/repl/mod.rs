@@ -1,0 +1,476 @@
+use crate::{ResultSet, Value};
+use std::io::Write;
+
+/// Format a ResultSet into a human-readable string.
+/// - For SELECT results (non-empty columns): header row, separator, data rows with aligned columns.
+/// - For DML results (empty columns): summary line with affected row count and optional insert key.
+pub fn format_result(rs: &ResultSet) -> String {
+    if rs.columns.is_empty() {
+        // DML result
+        let row_word = if rs.affected_rows == 1 { "row" } else { "rows" };
+        let mut result = format!("{} {} affected", rs.affected_rows, row_word);
+        if let Some(key) = rs.last_insert_key {
+            result.push_str(&format!(" (id {})", key));
+        }
+        result
+    } else {
+        // SELECT result
+        if rs.rows.is_empty() {
+            // Just header with 0 rows message
+            let header = rs.columns.join(" | ");
+            let separator = rs
+                .columns
+                .iter()
+                .map(|col| "-".repeat(col.len()))
+                .collect::<Vec<_>>()
+                .join("-|-");
+            format!("{}\n{} (0 rows)", header, separator)
+        } else {
+            // Calculate column widths
+            let widths: Vec<usize> = rs
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(col_idx, col_name)| {
+                    let header_width = col_name.len();
+                    let max_data_width = rs
+                        .rows
+                        .iter()
+                        .map(|row| value_to_cell(&row[col_idx]).len())
+                        .max()
+                        .unwrap_or(0);
+                    header_width.max(max_data_width)
+                })
+                .collect();
+
+            // Build header
+            let header = rs
+                .columns
+                .iter()
+                .enumerate()
+                .map(|(i, col)| format!("{:width$}", col, width = widths[i]))
+                .collect::<Vec<_>>()
+                .join(" | ");
+
+            // Build separator
+            let separator = widths
+                .iter()
+                .map(|w| "-".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("-|-");
+
+            // Build rows
+            let rows_str = rs
+                .rows
+                .iter()
+                .map(|row| {
+                    row.iter()
+                        .enumerate()
+                        .map(|(col_idx, val)| {
+                            let cell = value_to_cell(val);
+                            format!("{:width$}", cell, width = widths[col_idx])
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" | ")
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!("{}\n{}\n{}", header, separator, rows_str)
+        }
+    }
+}
+
+/// Convert a Value to a display string for table cells.
+fn value_to_cell(v: &Value) -> String {
+    match v {
+        Value::Integer(i) => i.to_string(),
+        Value::Real(f) => f.to_string(),
+        Value::Text(s) => s.clone(),
+        Value::Blob(_) => "[blob]".to_string(),
+        Value::Null => String::new(), // Empty cell for NULL
+    }
+}
+
+/// Run the interactive REPL loop.
+/// Reads from input, writes to output. Returns Ok(()) on normal exit (EOF or .quit),
+/// or Err if I/O operations fail.
+pub fn run(pot: &mut crate::Pot, input: impl std::io::BufRead, output: &mut impl Write) -> std::io::Result<()> {
+    let mut lines = input.lines();
+    let mut buffer = String::new();
+
+    loop {
+        // Determine which prompt to show
+        let prompt = if buffer.is_empty() {
+            "marinara> "
+        } else {
+            "     -> "
+        };
+
+        // Write prompt without trailing newline
+        write!(output, "{}", prompt)?;
+        output.flush()?;
+
+        // Read next line
+        match lines.next() {
+            Some(line_result) => {
+                let line = line_result?;
+                let trimmed = line.trim();
+
+                // Dot-commands are only recognized on a fresh line (i.e. when
+                // we are not already mid-accumulation of a multi-line
+                // statement). A continuation line that happens to start with
+                // '.' -- e.g. a decimal literal like ".5)" completing a
+                // multi-line INSERT -- must go through the same
+                // append-then-check-for-terminator path as any other
+                // continuation line.
+                if buffer.is_empty() && trimmed.starts_with('.') {
+                    match trimmed {
+                        ".tables" => {
+                            let tables = pot.noodles();
+                            if tables.is_empty() {
+                                writeln!(output, "(no tables)")?;
+                            } else {
+                                for table in tables {
+                                    writeln!(output, "{}", table)?;
+                                }
+                            }
+                        }
+                        ".help" => {
+                            writeln!(output, "MarinaraDB interactive shell commands:")?;
+                            writeln!(output, "  .tables     - List all tables")?;
+                            writeln!(output, "  .help       - Show this help message")?;
+                            writeln!(output, "  .quit/.exit - Exit the shell")?;
+                            writeln!(output, "  ;           - Execute statement")?;
+                        }
+                        ".quit" | ".exit" => {
+                            return Ok(());
+                        }
+                        _ => {
+                            writeln!(output, "Unknown command: {}", trimmed)?;
+                        }
+                    }
+                } else {
+                    // Regular SQL line, or a continuation line (possibly
+                    // starting with '.') while mid-statement-accumulation.
+                    if !buffer.is_empty() {
+                        buffer.push('\n');
+                    }
+                    buffer.push_str(&line);
+
+                    // Check if buffer contains a semicolon (statement terminator)
+                    if buffer.contains(';') {
+                        // Execute the statement
+                        let result = pot.execute(&buffer);
+                        match result {
+                            Ok(rs) => {
+                                writeln!(output, "{}", format_result(&rs))?;
+                            }
+                            Err(e) => {
+                                writeln!(output, "Error: {}", e)?;
+                            }
+                        }
+                        buffer.clear();
+                    }
+                }
+            }
+            None => {
+                // EOF reached
+                return Ok(());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_result_empty_select() {
+        let rs = ResultSet {
+            columns: vec!["id".to_string(), "name".to_string()],
+            rows: vec![],
+            affected_rows: 0,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("id"));
+        assert!(output.contains("name"));
+        assert!(output.contains("0 rows"));
+    }
+
+    #[test]
+    fn test_format_result_multi_row_select() {
+        let rs = ResultSet {
+            columns: vec!["id".to_string(), "name".to_string(), "age".to_string()],
+            rows: vec![
+                vec![Value::Integer(1), Value::Text("Alice".to_string()), Value::Integer(30)],
+                vec![Value::Integer(2), Value::Text("Bob".to_string()), Value::Null],
+                vec![Value::Integer(3), Value::Text("Charlie".to_string()), Value::Integer(25)],
+            ],
+            affected_rows: 0,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("id"));
+        assert!(output.contains("name"));
+        assert!(output.contains("age"));
+        assert!(output.contains("Alice"));
+        assert!(output.contains("Bob"));
+        assert!(output.contains("Charlie"));
+        assert!(output.contains("30"));
+        assert!(output.contains("25"));
+        assert!(output.lines().count() > 2); // Header, separator, at least 3 rows
+
+        // NULL should render as an empty/blank cell (not a literal "NULL" or
+        // similar placeholder string).
+        let bob_line = output
+            .lines()
+            .find(|l| l.contains("Bob"))
+            .expect("Bob row should be present");
+        let fields: Vec<&str> = bob_line.split(" | ").collect();
+        assert_eq!(fields.len(), 3, "Bob row should have 3 columns");
+        assert!(
+            fields[2].trim().is_empty(),
+            "NULL age should render as a blank cell, got {:?}",
+            fields[2]
+        );
+    }
+
+    #[test]
+    fn test_format_result_single_affected_row() {
+        let rs = ResultSet {
+            columns: vec![],
+            rows: vec![],
+            affected_rows: 1,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("1 row affected"));
+    }
+
+    #[test]
+    fn test_format_result_multiple_affected_rows() {
+        let rs = ResultSet {
+            columns: vec![],
+            rows: vec![],
+            affected_rows: 5,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("5 rows affected"));
+    }
+
+    #[test]
+    fn test_format_result_with_insert_key() {
+        let rs = ResultSet {
+            columns: vec![],
+            rows: vec![],
+            affected_rows: 1,
+            last_insert_key: Some(42),
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("1 row affected"));
+        assert!(output.contains("(id 42)"));
+    }
+
+    #[test]
+    fn test_format_result_with_null_values() {
+        let rs = ResultSet {
+            columns: vec!["a".to_string(), "b".to_string()],
+            rows: vec![
+                vec![Value::Integer(1), Value::Null],
+                vec![Value::Null, Value::Text("test".to_string())],
+            ],
+            affected_rows: 0,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("a"));
+        assert!(output.contains("b"));
+        assert!(output.contains("1"));
+        assert!(output.contains("test"));
+
+        // Pin down the exact NULL rendering: an empty/blank cell in the
+        // corresponding column position, for both a leading-column NULL and
+        // a trailing-column NULL.
+        let lines: Vec<&str> = output.lines().collect();
+        let data_rows = &lines[2..]; // skip header + separator
+
+        let row1_fields: Vec<&str> = data_rows[0].split(" | ").collect();
+        assert_eq!(row1_fields.len(), 2);
+        assert_eq!(row1_fields[0].trim(), "1");
+        assert!(
+            row1_fields[1].trim().is_empty(),
+            "NULL in column b should render as a blank cell, got {:?}",
+            row1_fields[1]
+        );
+
+        let row2_fields: Vec<&str> = data_rows[1].split(" | ").collect();
+        assert_eq!(row2_fields.len(), 2);
+        assert!(
+            row2_fields[0].trim().is_empty(),
+            "NULL in column a should render as a blank cell, got {:?}",
+            row2_fields[0]
+        );
+        assert_eq!(row2_fields[1].trim(), "test");
+    }
+
+    #[test]
+    fn test_format_result_with_real_values() {
+        let rs = ResultSet {
+            columns: vec!["price".to_string()],
+            rows: vec![
+                vec![Value::Real(10.50)],
+                vec![Value::Real(20.99)],
+            ],
+            affected_rows: 0,
+            last_insert_key: None,
+        };
+        let output = format_result(&rs);
+        assert!(output.contains("10.5"));
+        assert!(output.contains("20.99"));
+    }
+
+    #[test]
+    fn test_repl_basic_session() -> std::io::Result<()> {
+        use std::io::Cursor;
+
+        // Create a temporary pot file for testing
+        let db_path = "/tmp/test_repl_basic.pot";
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        let mut pot = crate::Pot::open(db_path).expect("Failed to create test pot");
+
+        // Simulate input: create table, insert, select, .tables, .quit
+        let input_data = r#"PLATE noodle users (name TEXT, age INT);
+LADLE INTO users (name, age) PORTIONS ('Alice', 30);
+SERVE * FROM users;
+.tables
+.quit
+"#;
+
+        let input = Cursor::new(input_data.as_bytes());
+        let mut output = Vec::new();
+
+        run(&mut pot, std::io::BufReader::new(input), &mut output)?;
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(output_str.contains("marinara>"), "Should show prompt");
+
+        // We should see the SELECT's column headers, the inserted value, and
+        // the table name in the .tables listing.
+        assert!(output_str.contains("name"), "Should show 'name' column header");
+        assert!(output_str.contains("age"), "Should show 'age' column header");
+        assert!(output_str.contains("Alice"), "Should show inserted value 'Alice'");
+        assert!(output_str.contains("30"), "Should show inserted value 30");
+        assert!(output_str.contains("users"), "Should show 'users' table name from .tables");
+
+        // Clean up
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repl_continuation_line_starting_with_dot() -> std::io::Result<()> {
+        use std::io::Cursor;
+
+        let db_path = "/tmp/test_repl_dot_continuation.pot";
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        let mut pot = crate::Pot::open(db_path).expect("Failed to create test pot");
+
+        // A multi-line SELECT whose continuation line starts with '.' (a
+        // qualified-column reference like "prices.cost" split across the
+        // line break) must still be recognized as a continuation of the
+        // buffered statement -- not misdetected as a dot-command -- and must
+        // execute once the terminating ';' shows up on that continuation
+        // line.
+        let input_data = "PLATE noodle prices (item TEXT, cost REAL);\nLADLE INTO prices (item, cost) PORTIONS ('pasta', 4.5);\nSERVE prices\n.cost FROM prices;\n.quit\n";
+
+        let input = Cursor::new(input_data.as_bytes());
+        let mut output = Vec::new();
+
+        run(&mut pot, std::io::BufReader::new(input), &mut output)?;
+
+        let output_str = String::from_utf8_lossy(&output);
+        assert!(
+            !output_str.contains("Unknown command"),
+            "Continuation line starting with '.' must not be treated as a dot-command, got: {}",
+            output_str
+        );
+        assert!(
+            output_str.contains("cost"),
+            "The multi-line SELECT should have executed, showing the 'cost' column header, got: {}",
+            output_str
+        );
+        assert!(
+            output_str.contains("4.5"),
+            "The multi-line SELECT should have executed and returned the inserted value, got: {}",
+            output_str
+        );
+
+        // Clean up
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_repl_error_recovery() -> std::io::Result<()> {
+        use std::io::Cursor;
+
+        let db_path = "/tmp/test_repl_error.pot";
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        let mut pot = crate::Pot::open(db_path).expect("Failed to create test pot");
+
+        // Input with a malformed statement, followed by a valid statement on
+        // its own line, followed by .tables (to prove the valid statement
+        // actually executed), followed by .quit -- with an extra trailing
+        // line after .quit that must NOT be processed, proving the loop
+        // stopped because of .quit and not because it happened to hit EOF.
+        let input_data = "INVALID SQL;\nPLATE noodle test (col INT);\n.tables\n.quit\nSERVE * FROM test;\n";
+
+        let input = Cursor::new(input_data.as_bytes());
+        let mut output = Vec::new();
+
+        run(&mut pot, std::io::BufReader::new(input), &mut output)?;
+
+        let output_str = String::from_utf8_lossy(&output);
+        // The malformed statement should have produced an error message...
+        assert!(output_str.contains("Error:"), "Should show error message");
+        // ...and the loop should have continued, executing the subsequent
+        // valid statement (proven by "test" showing up in the .tables output)...
+        assert!(
+            output_str.contains("test"),
+            "Should show 'test' table created after error recovery, via .tables output"
+        );
+        // ...and it should NOT have executed the SELECT that comes after
+        // .quit in the input -- proving the session ended on .quit rather
+        // than running to EOF.
+        assert!(
+            !output_str.contains("col"),
+            "Should not process input after .quit (SELECT's 'col' header must not appear)"
+        );
+
+        // Clean up
+        if std::path::Path::new(db_path).exists() {
+            std::fs::remove_file(db_path)?;
+        }
+
+        Ok(())
+    }
+}
