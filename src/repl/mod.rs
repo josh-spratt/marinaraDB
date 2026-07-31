@@ -18,7 +18,13 @@ pub fn format_result(rs: &ResultSet) -> String {
         if rs.rows.is_empty() {
             // Just header with 0 rows message
             let header = rs.columns.join(" | ");
-            format!("{}\n---- (0 rows)", header)
+            let separator = rs
+                .columns
+                .iter()
+                .map(|col| "-".repeat(col.len()))
+                .collect::<Vec<_>>()
+                .join("-|-");
+            format!("{}\n{} (0 rows)", header, separator)
         } else {
             // Calculate column widths
             let widths: Vec<usize> = rs
@@ -51,7 +57,7 @@ pub fn format_result(rs: &ResultSet) -> String {
                 .iter()
                 .map(|w| "-".repeat(*w))
                 .collect::<Vec<_>>()
-                .join("-+-");
+                .join("-|-");
 
             // Build rows
             let rows_str = rs
@@ -215,8 +221,21 @@ mod tests {
         assert!(output.contains("Charlie"));
         assert!(output.contains("30"));
         assert!(output.contains("25"));
-        // NULL should render as empty cell
         assert!(output.lines().count() > 2); // Header, separator, at least 3 rows
+
+        // NULL should render as an empty/blank cell (not a literal "NULL" or
+        // similar placeholder string).
+        let bob_line = output
+            .lines()
+            .find(|l| l.contains("Bob"))
+            .expect("Bob row should be present");
+        let fields: Vec<&str> = bob_line.split(" | ").collect();
+        assert_eq!(fields.len(), 3, "Bob row should have 3 columns");
+        assert!(
+            fields[2].trim().is_empty(),
+            "NULL age should render as a blank cell, got {:?}",
+            fields[2]
+        );
     }
 
     #[test]
@@ -272,6 +291,30 @@ mod tests {
         assert!(output.contains("b"));
         assert!(output.contains("1"));
         assert!(output.contains("test"));
+
+        // Pin down the exact NULL rendering: an empty/blank cell in the
+        // corresponding column position, for both a leading-column NULL and
+        // a trailing-column NULL.
+        let lines: Vec<&str> = output.lines().collect();
+        let data_rows = &lines[2..]; // skip header + separator
+
+        let row1_fields: Vec<&str> = data_rows[0].split(" | ").collect();
+        assert_eq!(row1_fields.len(), 2);
+        assert_eq!(row1_fields[0].trim(), "1");
+        assert!(
+            row1_fields[1].trim().is_empty(),
+            "NULL in column b should render as a blank cell, got {:?}",
+            row1_fields[1]
+        );
+
+        let row2_fields: Vec<&str> = data_rows[1].split(" | ").collect();
+        assert_eq!(row2_fields.len(), 2);
+        assert!(
+            row2_fields[0].trim().is_empty(),
+            "NULL in column a should render as a blank cell, got {:?}",
+            row2_fields[0]
+        );
+        assert_eq!(row2_fields[1].trim(), "test");
     }
 
     #[test]
@@ -317,7 +360,14 @@ SERVE * FROM users;
 
         let output_str = String::from_utf8_lossy(&output);
         assert!(output_str.contains("marinara>"), "Should show prompt");
-        // We should see output from the SELECT, and the tables list
+
+        // We should see the SELECT's column headers, the inserted value, and
+        // the table name in the .tables listing.
+        assert!(output_str.contains("name"), "Should show 'name' column header");
+        assert!(output_str.contains("age"), "Should show 'age' column header");
+        assert!(output_str.contains("Alice"), "Should show inserted value 'Alice'");
+        assert!(output_str.contains("30"), "Should show inserted value 30");
+        assert!(output_str.contains("users"), "Should show 'users' table name from .tables");
 
         // Clean up
         if std::path::Path::new(db_path).exists() {
@@ -338,8 +388,12 @@ SERVE * FROM users;
 
         let mut pot = crate::Pot::open(db_path).expect("Failed to create test pot");
 
-        // Input with a malformed statement followed by a valid one
-        let input_data = "INVALID SQL;PLATE noodle test (col INT);.quit\n";
+        // Input with a malformed statement, followed by a valid statement on
+        // its own line, followed by .tables (to prove the valid statement
+        // actually executed), followed by .quit -- with an extra trailing
+        // line after .quit that must NOT be processed, proving the loop
+        // stopped because of .quit and not because it happened to hit EOF.
+        let input_data = "INVALID SQL;\nPLATE noodle test (col INT);\n.tables\n.quit\nSERVE * FROM test;\n";
 
         let input = Cursor::new(input_data.as_bytes());
         let mut output = Vec::new();
@@ -347,10 +401,21 @@ SERVE * FROM users;
         run(&mut pot, std::io::BufReader::new(input), &mut output)?;
 
         let output_str = String::from_utf8_lossy(&output);
-        // Should see error message
+        // The malformed statement should have produced an error message...
         assert!(output_str.contains("Error:"), "Should show error message");
-        // Should continue after error and show prompt again
-        assert!(output_str.contains("marinara>"), "Should continue after error");
+        // ...and the loop should have continued, executing the subsequent
+        // valid statement (proven by "test" showing up in the .tables output)...
+        assert!(
+            output_str.contains("test"),
+            "Should show 'test' table created after error recovery, via .tables output"
+        );
+        // ...and it should NOT have executed the SELECT that comes after
+        // .quit in the input -- proving the session ended on .quit rather
+        // than running to EOF.
+        assert!(
+            !output_str.contains("col"),
+            "Should not process input after .quit (SELECT's 'col' header must not appear)"
+        );
 
         // Clean up
         if std::path::Path::new(db_path).exists() {
