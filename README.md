@@ -75,6 +75,24 @@ let key = pot.insert_strand("users", vec![Value::Text("Tony".into()), Value::Int
 let rows = pot.scan_noodle("users")?; // Vec<(i64, Vec<Value>)>
 ```
 
+Or drive it with SaucQL directly via `Pot::execute`, which parses, plans, and runs a statement in one call:
+
+```rust
+use marinaradb::Pot;
+
+let mut pot = Pot::open("my_app.pot")?;
+pot.execute("PLATE noodle users (name TEXT NOT VUOTO, age INT);")?;
+pot.execute("LADLE INTO users (name, age) PORTIONS ('Tony', 38), ('Maria', 29);")?;
+pot.execute("SEASON users SET age = 39 STRAINED BY name = 'Tony';")?;
+
+let result = pot.execute("SERVE name, age FROM users STRAINED BY age > 30;")?;
+for row in &result.rows {
+    println!("{row:?}");
+}
+```
+
+Only single-table statements are executable today — see [Current Status](#current-status) for what's parsed but not yet runnable (joins, `ARRANGED BY`, transactions, Strainer indexes).
+
 ## Versioning and Releases
 
 This project uses [Semantic Versioning](https://semver.org). The version in `Cargo.toml` is the source of truth.
