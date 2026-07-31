@@ -1,5 +1,6 @@
 pub mod parser;
 pub mod prep_log;
+pub mod repl;
 pub mod sous_chef;
 pub mod stove;
 pub mod strainer;
