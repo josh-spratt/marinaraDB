@@ -1,9 +1,26 @@
-use crate::parser::ast::{ColumnSpec, Expr, SelectItem, Statement};
+use crate::parser::ast::{ColumnSpec, Expr, OrderByItem, SelectItem, Statement, TableRef};
 use crate::Scottatura;
 
 #[derive(Debug, Clone)]
+pub struct JoinPlan {
+    pub table: TableRef,
+    pub left_col: (Option<String>, String),
+    pub right_col: (Option<String>, String),
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // Select is inherently larger; boxing would ripple indirection into every match site
 pub enum Plan {
-    SeqScan { table: String, columns: Vec<SelectItem>, filter: Option<Expr> },
+    Select {
+        from: TableRef,
+        join: Option<JoinPlan>,
+        filter: Option<Expr>,
+        group_by: Vec<String>,
+        columns: Vec<SelectItem>,
+        order_by: Vec<OrderByItem>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    },
     Insert { table: String, columns: Vec<String>, rows: Vec<Vec<Expr>> },
     Update { table: String, assignments: Vec<(String, Expr)>, filter: Expr },
     Delete { table: String, filter: Expr },
@@ -26,7 +43,16 @@ pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
             if !sel.group_by.is_empty() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "BUNDLED BY".to_string() });
             }
-            Ok(Plan::SeqScan { table: sel.from.name, columns: sel.items, filter: sel.filter })
+            Ok(Plan::Select {
+                from: sel.from,
+                join: None,
+                filter: sel.filter,
+                group_by: sel.group_by,
+                columns: sel.items,
+                order_by: sel.order_by,
+                limit: sel.limit,
+                offset: sel.offset,
+            })
         }
         Statement::Insert { table, columns, rows } => Ok(Plan::Insert { table, columns, rows }),
         Statement::Update { table, assignments, filter } => Ok(Plan::Update { table, assignments, filter }),
@@ -46,17 +72,17 @@ mod tests {
     use crate::parser::parse_statement;
 
     #[test]
-    fn test_select_becomes_seqscan() {
+    fn test_select_becomes_select_plan() {
         let stmt = parse_statement("SERVE * FROM users STRAINED BY age > 18;").unwrap();
         let p = plan(stmt).unwrap();
-        assert!(matches!(p, Plan::SeqScan { table, .. } if table == "users"));
+        assert!(matches!(p, Plan::Select { from, .. } if from.name == "users"));
     }
 
     #[test]
     fn test_select_without_filter() {
         let stmt = parse_statement("SERVE * FROM users;").unwrap();
         let p = plan(stmt).unwrap();
-        assert!(matches!(p, Plan::SeqScan { filter: None, .. }));
+        assert!(matches!(p, Plan::Select { filter: None, .. }));
     }
 
     #[test]

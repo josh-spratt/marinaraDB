@@ -331,10 +331,10 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
         }
-        Plan::SeqScan { table, columns, filter } => {
-            let recipe = pot.recipe(&table)?;
-            let schema = full_schema(&table, &recipe.columns);
-            let raw_rows = pot.scan_noodle(&table)?;
+        Plan::Select { from, join: _, filter, group_by: _, columns, order_by: _, limit: _, offset: _ } => {
+            let recipe = pot.recipe(&from.name)?;
+            let schema = full_schema(&from.name, &recipe.columns);
+            let raw_rows = pot.scan_noodle(&from.name)?;
             let out_names = project_names(&columns, &schema);
             let mut out_rows = Vec::new();
             for (key, values) in raw_rows {
