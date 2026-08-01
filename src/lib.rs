@@ -67,6 +67,9 @@ pub enum Scottatura {
     #[error("Scottatura [RICETTA_003]: Ingredient `{col}` not found in noodle `{name}`.")]
     ColumnNotFound { col: String, name: String },
 
+    #[error("Scottatura [RICETTA_010]: Ingredient `{name}` is ambiguous — it exists in more than one noodle in this TOSS. Qualify it (e.g. `table.{name}`).")]
+    AmbiguousColumn { name: String },
+
     #[error("Scottatura [TIPO_001]: Cannot store {got} value in ingredient `{col}` (expected {expected}).")]
     TypeMismatch { got: String, col: String, expected: String },
 

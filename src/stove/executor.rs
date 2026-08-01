@@ -43,14 +43,25 @@ impl Tri {
     }
 }
 
-pub(crate) fn full_schema(cols: &[ColumnDef]) -> Vec<ColumnDef> {
-    let mut out = vec![ColumnDef {
-        name: "id".to_string(),
-        col_type: ColType::Integer,
-        nullable: false,
-        strainer_root: None,
+#[derive(Debug, Clone)]
+pub(crate) struct SchemaColumn {
+    pub owner: String,
+    pub col: ColumnDef,
+}
+
+pub(crate) type Schema = Vec<SchemaColumn>;
+
+pub(crate) fn full_schema(owner: &str, cols: &[ColumnDef]) -> Schema {
+    let mut out = vec![SchemaColumn {
+        owner: owner.to_string(),
+        col: ColumnDef {
+            name: "id".to_string(),
+            col_type: ColType::Integer,
+            nullable: false,
+            strainer_root: None,
+        },
     }];
-    out.extend(cols.iter().cloned());
+    out.extend(cols.iter().cloned().map(|col| SchemaColumn { owner: owner.to_string(), col }));
     out
 }
 
@@ -60,10 +71,16 @@ pub(crate) fn full_row(key: i64, values: &[Value]) -> Vec<Value> {
     out
 }
 
-fn column_value(name: &str, row: &[Value], schema: &[ColumnDef]) -> Result<Value, Scottatura> {
-    schema.iter().position(|c| c.name == name)
-        .map(|i| row[i].clone())
-        .ok_or_else(|| Scottatura::ColumnNotFound { col: name.to_string(), name: "?".to_string() })
+fn column_value(qualifier: Option<&str>, name: &str, row: &[Value], schema: &Schema) -> Result<Value, Scottatura> {
+    let matches: Vec<usize> = schema.iter().enumerate()
+        .filter(|(_, sc)| sc.col.name == name && qualifier.is_none_or(|q| sc.owner == q))
+        .map(|(i, _)| i)
+        .collect();
+    match matches.as_slice() {
+        [] => Err(Scottatura::ColumnNotFound { col: name.to_string(), name: qualifier.unwrap_or("?").to_string() }),
+        [i] => Ok(row[*i].clone()),
+        _ => Err(Scottatura::AmbiguousColumn { name: name.to_string() }),
+    }
 }
 
 fn values_equal(l: &Value, r: &Value) -> Result<bool, Scottatura> {
@@ -144,10 +161,10 @@ fn eval_arith(op: &BinOp, l: Value, r: Value) -> Result<Value, Scottatura> {
     })
 }
 
-pub(crate) fn eval_scalar(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> Result<Value, Scottatura> {
+pub(crate) fn eval_scalar(expr: &Expr, row: &[Value], schema: &Schema) -> Result<Value, Scottatura> {
     match expr {
         Expr::Literal(v) => Ok(v.clone()),
-        Expr::Column { name, .. } => column_value(name, row, schema),
+        Expr::Column { qualifier, name } => column_value(qualifier.as_deref(), name, row, schema),
         Expr::BinaryOp { op: op @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div), left, right } => {
             let l = eval_scalar(left, row, schema)?;
             let r = eval_scalar(right, row, schema)?;
@@ -158,7 +175,7 @@ pub(crate) fn eval_scalar(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> R
     }
 }
 
-pub(crate) fn eval_tri(expr: &Expr, row: &[Value], schema: &[ColumnDef]) -> Result<Tri, Scottatura> {
+pub(crate) fn eval_tri(expr: &Expr, row: &[Value], schema: &Schema) -> Result<Tri, Scottatura> {
     match expr {
         Expr::BinaryOp { op: BinOp::And, left, right } => {
             Ok(eval_tri(left, row, schema)?.and(eval_tri(right, row, schema)?))
@@ -238,13 +255,13 @@ use crate::ResultSet;
 /// schema. This does not depend on any particular row, so it can (and should)
 /// be computed once regardless of how many rows match the filter -- including
 /// zero rows.
-fn project_names(items: &[SelectItem], schema: &[ColumnDef]) -> Vec<String> {
+fn project_names(items: &[SelectItem], schema: &Schema) -> Vec<String> {
     let mut names = Vec::new();
     for (i, item) in items.iter().enumerate() {
         match item {
             SelectItem::Star => {
-                for col in schema {
-                    names.push(col.name.clone());
+                for sc in schema {
+                    names.push(sc.col.name.clone());
                 }
             }
             SelectItem::Expr { expr, alias } => {
@@ -260,13 +277,13 @@ fn project_names(items: &[SelectItem], schema: &[ColumnDef]) -> Vec<String> {
 }
 
 /// Resolve the projected values for a SELECT item list against a single row.
-fn project_values(items: &[SelectItem], schema: &[ColumnDef], row: &[Value]) -> Result<Vec<Value>, Scottatura> {
+fn project_values(items: &[SelectItem], schema: &Schema, row: &[Value]) -> Result<Vec<Value>, Scottatura> {
     let mut vals = Vec::new();
     for item in items {
         match item {
             SelectItem::Star => {
-                for col in schema {
-                    vals.push(column_value(&col.name, row, schema)?);
+                for val in row.iter().take(schema.len()) {
+                    vals.push(val.clone());
                 }
             }
             SelectItem::Expr { expr, .. } => {
@@ -284,8 +301,9 @@ fn resolve_insert_values(table: &str, table_cols: &[ColumnDef], columns: &[Strin
         }
     }
     let mut by_name: std::collections::HashMap<&str, Value> = std::collections::HashMap::new();
+    let empty_schema: Schema = Vec::new();
     for (name, expr) in columns.iter().zip(row_exprs.iter()) {
-        by_name.insert(name.as_str(), eval_scalar(expr, &[], &[])?);
+        by_name.insert(name.as_str(), eval_scalar(expr, &[], &empty_schema)?);
     }
     Ok(table_cols.iter().map(|col| by_name.remove(col.name.as_str()).unwrap_or(Value::Null)).collect())
 }
@@ -315,7 +333,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
         }
         Plan::SeqScan { table, columns, filter } => {
             let recipe = pot.recipe(&table)?;
-            let schema = full_schema(&recipe.columns);
+            let schema = full_schema(&table, &recipe.columns);
             let raw_rows = pot.scan_noodle(&table)?;
             let out_names = project_names(&columns, &schema);
             let mut out_rows = Vec::new();
@@ -333,7 +351,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
         }
         Plan::Update { table, assignments, filter } => {
             let recipe = pot.recipe(&table)?;
-            let schema = full_schema(&recipe.columns);
+            let schema = full_schema(&table, &recipe.columns);
             for (name, _) in &assignments {
                 if name == "id" {
                     return Err(Scottatura::AlDenteKeyNotUpdatable);
@@ -360,7 +378,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
         }
         Plan::Delete { table, filter } => {
             let recipe = pot.recipe(&table)?;
-            let schema = full_schema(&recipe.columns);
+            let schema = full_schema(&table, &recipe.columns);
             let raw_rows = pot.scan_noodle(&table)?;
             let mut affected = 0u64;
             for (key, values) in raw_rows {
@@ -462,12 +480,11 @@ mod tests {
     use crate::parser::parse_statement;
     use crate::parser::ast::Statement;
 
-    fn schema() -> Vec<ColumnDef> {
-        vec![
-            ColumnDef { name: "id".into(), col_type: ColType::Integer, nullable: false, strainer_root: None },
+    fn schema() -> Schema {
+        full_schema("t", &[
             ColumnDef { name: "name".into(), col_type: ColType::Text, nullable: true, strainer_root: None },
             ColumnDef { name: "age".into(), col_type: ColType::Integer, nullable: true, strainer_root: None },
-        ]
+        ])
     }
 
     fn filter_of(sql: &str) -> Expr {
@@ -549,5 +566,38 @@ mod tests {
         let row = vec![Value::Integer(1), Value::Text("banana".into()), Value::Integer(38)];
         let f = filter_of("SERVE * FROM t STRAINED BY name > 'apple';");
         assert_eq!(eval_tri(&f, &row, &schema()).unwrap(), Tri::True);
+    }
+
+    fn two_table_schema() -> Schema {
+        let mut s = full_schema("users", &[
+            ColumnDef { name: "name".into(), col_type: ColType::Text, nullable: true, strainer_root: None },
+        ]);
+        s.extend(full_schema("orders", &[
+            ColumnDef { name: "name".into(), col_type: ColType::Text, nullable: true, strainer_root: None },
+        ]));
+        s
+    }
+
+    #[test]
+    fn test_qualified_column_resolves_correct_side() {
+        // schema: [users.id, users.name, orders.id, orders.name]
+        let row = vec![
+            Value::Integer(1), Value::Text("Tony".into()),
+            Value::Integer(9), Value::Text("Pizza".into()),
+        ];
+        let schema = two_table_schema();
+        let v = column_value(Some("orders"), "name", &row, &schema).unwrap();
+        assert_eq!(v, Value::Text("Pizza".into()));
+    }
+
+    #[test]
+    fn test_unqualified_ambiguous_column_errors() {
+        let row = vec![
+            Value::Integer(1), Value::Text("Tony".into()),
+            Value::Integer(9), Value::Text("Pizza".into()),
+        ];
+        let schema = two_table_schema();
+        let err = column_value(None, "name", &row, &schema).unwrap_err();
+        assert!(matches!(err, Scottatura::AmbiguousColumn { name } if name == "name"));
     }
 }
