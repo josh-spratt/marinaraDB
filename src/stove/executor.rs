@@ -116,6 +116,49 @@ fn compare_values(l: &Value, r: &Value) -> Result<Ordering, Scottatura> {
     }
 }
 
+/// Compares two projected values for ORDER BY. VUOTO always sorts first,
+/// regardless of ASC/DESC — only non-VUOTO pairs are affected by direction.
+/// A type mismatch between two values in the same projected column can't
+/// happen for a column sourced from one declared type; if it somehow did
+/// (e.g. via a REAL NaN), treat the pair as equal rather than propagating
+/// an error through a non-fallible sort comparator.
+fn compare_vuoto_first(a: &Value, b: &Value, descending: bool) -> Ordering {
+    match (matches!(a, Value::Null), matches!(b, Value::Null)) {
+        (true, true) => Ordering::Equal,
+        (true, false) => Ordering::Less,
+        (false, true) => Ordering::Greater,
+        (false, false) => {
+            let ord = compare_values(a, b).unwrap_or(Ordering::Equal);
+            if descending { ord.reverse() } else { ord }
+        }
+    }
+}
+
+use crate::parser::ast::OrderByItem;
+
+/// Sorts projected rows in place. `order_by` columns must appear in
+/// `out_names` (the projected output) — ORDER BY on a column that wasn't
+/// selected/aliased is a ColumnNotFound error, not a fallback to the
+/// underlying table schema.
+fn sort_rows(rows: &mut [Vec<Value>], order_by: &[OrderByItem], out_names: &[String]) -> Result<(), Scottatura> {
+    let mut positions = Vec::with_capacity(order_by.len());
+    for item in order_by {
+        let idx = out_names.iter().position(|n| n == &item.column)
+            .ok_or_else(|| Scottatura::ColumnNotFound { col: item.column.clone(), name: "<projection>".to_string() })?;
+        positions.push((idx, item.descending));
+    }
+    rows.sort_by(|a, b| {
+        for &(idx, desc) in &positions {
+            let ord = compare_vuoto_first(&a[idx], &b[idx], desc);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        Ordering::Equal
+    });
+    Ok(())
+}
+
 fn like_match(text: &str, pattern: &str) -> bool {
     fn rec(t: &[u8], p: &[u8]) -> bool {
         match p.first() {
@@ -331,7 +374,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
         }
-        Plan::Select { from, join: _, filter, group_by: _, columns, order_by: _, limit: _, offset: _ } => {
+        Plan::Select { from, join: _, filter, group_by: _, columns, order_by, limit: _, offset: _ } => {
             let recipe = pot.recipe(&from.name)?;
             let schema = full_schema(&from.name, &recipe.columns);
             let raw_rows = pot.scan_noodle(&from.name)?;
@@ -345,6 +388,9 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
                     }
                 }
                 out_rows.push(project_values(&columns, &schema, &row)?);
+            }
+            if !order_by.is_empty() {
+                sort_rows(&mut out_rows, &order_by, &out_names)?;
             }
             let n = out_rows.len() as u64;
             Ok(ResultSet { columns: out_names, rows: out_rows, affected_rows: n, last_insert_key: None })

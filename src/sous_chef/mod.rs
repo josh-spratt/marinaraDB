@@ -34,9 +34,6 @@ pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
             if sel.join.is_some() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "TOSS (join)".to_string() });
             }
-            if !sel.order_by.is_empty() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "ARRANGED BY".to_string() });
-            }
             if sel.limit.is_some() || sel.offset.is_some() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "ONLY / SKIP".to_string() });
             }
@@ -93,10 +90,10 @@ mod tests {
     }
 
     #[test]
-    fn test_order_by_rejected() {
+    fn test_order_by_passthrough() {
         let stmt = parse_statement("SERVE * FROM users ARRANGED BY age;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "ARRANGED BY"));
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { order_by, .. } if order_by.len() == 1 && order_by[0].column == "age" && !order_by[0].descending));
     }
 
     #[test]

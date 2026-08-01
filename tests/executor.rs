@@ -63,14 +63,10 @@ fn test_join_returns_clause_not_yet_supported() {
 }
 
 #[test]
-fn test_order_by_limit_bundled_by_all_return_clause_not_yet_supported() {
+fn test_limit_and_bundled_by_still_return_clause_not_yet_supported() {
     let path = temp_path();
     let mut pot = Pot::open(&path).unwrap();
     pot.execute("PLATE noodle users (age INT);").unwrap();
-    assert!(matches!(
-        pot.execute("SERVE * FROM users ARRANGED BY age;").unwrap_err(),
-        Scottatura::ClauseNotYetSupported { .. }
-    ));
     assert!(matches!(
         pot.execute("SERVE * FROM users ONLY 10;").unwrap_err(),
         Scottatura::ClauseNotYetSupported { .. }
@@ -79,6 +75,27 @@ fn test_order_by_limit_bundled_by_all_return_clause_not_yet_supported() {
         pot.execute("SERVE age FROM users BUNDLED BY age;").unwrap_err(),
         Scottatura::ClauseNotYetSupported { .. }
     ));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_order_by_sorts_ascending_and_descending_with_vuoto_first() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle users (name TEXT, age INT);").unwrap();
+    pot.execute("LADLE INTO users (name, age) PORTIONS ('Carol', 40), ('Alice', 20), ('Bob', VUOTO) , ('Dave', 20);").unwrap();
+    // Bob has VUOTO age.
+    let r = pot.execute("SERVE name, age FROM users ARRANGED BY age;").unwrap();
+    let names: Vec<String> = r.rows.iter().map(|row| match &row[0] { Value::Text(s) => s.clone(), _ => panic!() }).collect();
+    assert_eq!(names[0], "Bob"); // VUOTO first regardless of direction
+    let ages: Vec<Value> = r.rows[1..].iter().map(|row| row[1].clone()).collect();
+    assert_eq!(ages, vec![Value::Integer(20), Value::Integer(20), Value::Integer(40)]);
+
+    let r = pot.execute("SERVE name, age FROM users ARRANGED BY age DESC;").unwrap();
+    let names: Vec<String> = r.rows.iter().map(|row| match &row[0] { Value::Text(s) => s.clone(), _ => panic!() }).collect();
+    assert_eq!(names[0], "Bob"); // still first in DESC
+    let ages: Vec<Value> = r.rows[1..].iter().map(|row| row[1].clone()).collect();
+    assert_eq!(ages, vec![Value::Integer(40), Value::Integer(20), Value::Integer(20)]);
     std::fs::remove_file(&path).ok();
 }
 
