@@ -143,8 +143,15 @@ use crate::parser::ast::OrderByItem;
 fn sort_rows(rows: &mut [Vec<Value>], order_by: &[OrderByItem], out_names: &[String]) -> Result<(), Scottatura> {
     let mut positions = Vec::with_capacity(order_by.len());
     for item in order_by {
-        let idx = out_names.iter().position(|n| n == &item.column)
-            .ok_or_else(|| Scottatura::ColumnNotFound { col: item.column.clone(), name: "<projection>".to_string() })?;
+        let matches: Vec<usize> = out_names.iter().enumerate()
+            .filter(|(_, n)| *n == &item.column)
+            .map(|(i, _)| i)
+            .collect();
+        let idx = match matches.as_slice() {
+            [] => return Err(Scottatura::ColumnNotFound { col: item.column.clone(), name: "<projection>".to_string() }),
+            [i] => *i,
+            _ => return Err(Scottatura::AmbiguousColumn { name: item.column.clone() }),
+        };
         positions.push((idx, item.descending));
     }
     rows.sort_by(|a, b| {
@@ -425,6 +432,21 @@ fn eval_aggregate(name: &str, arg: Option<&Expr>, group_rows: &[Vec<Value>], sch
     }
 }
 
+/// Structurally checks whether `qualifier`/`name` resolve unambiguously
+/// against `schema`, independent of any particular row -- used for the
+/// zero-row group case where there's no row to resolve a qualified column
+/// value against, but the qualifier still needs validating.
+fn column_resolves(qualifier: Option<&str>, name: &str, schema: &Schema) -> Result<(), Scottatura> {
+    let matches = schema.iter()
+        .filter(|sc| sc.col.name == name && qualifier.is_none_or(|q| sc.owner == q))
+        .count();
+    match matches {
+        0 => Err(Scottatura::ColumnNotFound { col: name.to_string(), name: qualifier.unwrap_or("?").to_string() }),
+        1 => Ok(()),
+        _ => Err(Scottatura::AmbiguousColumn { name: name.to_string() }),
+    }
+}
+
 fn project_grouped(items: &[SelectItem], group_by: &[String], schema: &Schema, key: &[Value], rows: &[Vec<Value>]) -> Result<Vec<Value>, Scottatura> {
     let mut out = Vec::new();
     for item in items {
@@ -432,10 +454,30 @@ fn project_grouped(items: &[SelectItem], group_by: &[String], schema: &Schema, k
             SelectItem::Expr { expr: Expr::FunctionCall { name, arg }, .. } => {
                 out.push(eval_aggregate(name, arg.as_deref(), rows, schema)?);
             }
-            SelectItem::Expr { expr: Expr::Column { name, .. }, .. } => {
+            SelectItem::Expr { expr: Expr::Column { qualifier: None, name }, .. } => {
+                // Unqualified name: resolve via the group_by index shortcut, as
+                // before. This is safe even under a join because `build_groups`
+                // already resolved this same bare name unambiguously via
+                // `column_value(None, name, &row, schema)` when building the key.
                 let idx = group_by.iter().position(|g| g == name)
                     .ok_or_else(|| Scottatura::ColumnNotGroupedOrAggregated { name: name.clone() })?;
                 out.push(key[idx].clone());
+            }
+            SelectItem::Expr { expr: Expr::Column { qualifier: Some(q), name }, .. } => {
+                // Qualified name: validate the qualifier against the schema
+                // before falling back to the group_by-index shortcut, so a
+                // wrong/nonexistent qualifier (or one that only matches a
+                // column outside the group-by list) is caught rather than
+                // silently ignored.
+                match rows.first() {
+                    Some(row) => out.push(column_value(Some(q.as_str()), name, row, schema)?),
+                    None => {
+                        column_resolves(Some(q.as_str()), name, schema)?;
+                        let idx = group_by.iter().position(|g| g == name)
+                            .ok_or_else(|| Scottatura::ColumnNotGroupedOrAggregated { name: name.clone() })?;
+                        out.push(key[idx].clone());
+                    }
+                }
             }
             // sous_chef::validate_aggregate_context already rejects every other shape
             // (Star, arbitrary expressions) before this code runs in aggregate context.

@@ -251,3 +251,47 @@ fn test_join_group_order_limit_combined() {
     ]);
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn test_grouped_projection_rejects_wrong_qualifier() {
+    // `orders` has no `name` column at all -- previously, the group-by-index
+    // shortcut in `project_grouped` ignored the `o.` qualifier entirely and
+    // silently resolved `o.name` against `group_by`'s bare "name" entry,
+    // which actually came from `customers.name`. That's a silent wrong
+    // answer: `o.name` must not resolve to `customers.name`.
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle customers (name TEXT);").unwrap();
+    pot.execute("PLATE noodle orders (customer_id INT, item TEXT);").unwrap();
+    pot.execute("LADLE INTO customers (name) PORTIONS ('Tony');").unwrap();
+    pot.execute("LADLE INTO orders (customer_id, item) PORTIONS (1, 'Pizza');").unwrap();
+
+    let err = pot.execute(
+        "SERVE o.name, COUNT(*) FROM customers c TOSS orders o ON c.id = o.customer_id \
+         BUNDLED BY name;"
+    ).unwrap_err();
+    assert!(matches!(err, Scottatura::ColumnNotFound { .. }), "expected ColumnNotFound, got {err:?}");
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_order_by_ambiguous_duplicate_projected_column_errors() {
+    // `SELECT *` on a join where both tables have an implicit `id` column
+    // produces two output columns both named "id". Ordering by "id" must
+    // error rather than silently sorting by the leftmost match.
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle a (x INT);").unwrap();
+    pot.execute("PLATE noodle b (x INT);").unwrap();
+    pot.execute("LADLE INTO a (x) PORTIONS (1);").unwrap();
+    pot.execute("LADLE INTO b (x) PORTIONS (1);").unwrap();
+
+    let err = pot.execute("SERVE * FROM a TOSS b ON a.x = b.x ARRANGED BY id DESC;").unwrap_err();
+    let msg = format!("{err:?}");
+    assert!(matches!(err, Scottatura::AmbiguousColumn { ref name } if name == "id"), "expected AmbiguousColumn, got {msg}");
+
+    // A uniquely-named projected column still orders fine.
+    let r = pot.execute("SERVE a.x FROM a TOSS b ON a.x = b.x ARRANGED BY x;").unwrap();
+    assert_eq!(r.rows.len(), 1);
+    std::fs::remove_file(&path).ok();
+}
