@@ -1,4 +1,5 @@
 pub mod record;
+pub mod recovery;
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
