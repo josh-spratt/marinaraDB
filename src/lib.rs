@@ -135,4 +135,10 @@ pub enum Scottatura {
 
     #[error("Scottatura [EXEC_003]: Strainer indexes (STRAIN / REMOVE STRAINER) are not supported yet.")]
     StrainerNotSupported,
+
+    #[error("Scottatura [RICETTA_011]: Ingredient `{name}` is neither in BUNDLED BY nor wrapped in an aggregate function.")]
+    ColumnNotGroupedOrAggregated { name: String },
+
+    #[error("Scottatura [EXEC_004]: Unknown aggregate function `{name}`. Supported: COUNT, SUM, AVG, MIN, MAX.")]
+    UnknownAggregateFunction { name: String },
 }

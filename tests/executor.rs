@@ -83,14 +83,57 @@ fn test_join_unqualified_ambiguous_column_errors() {
 }
 
 #[test]
-fn test_bundled_by_still_returns_clause_not_yet_supported() {
+fn test_group_by_with_aggregates() {
     let path = temp_path();
     let mut pot = Pot::open(&path).unwrap();
-    pot.execute("PLATE noodle users (age INT);").unwrap();
-    assert!(matches!(
-        pot.execute("SERVE age FROM users BUNDLED BY age;").unwrap_err(),
-        Scottatura::ClauseNotYetSupported { .. }
-    ));
+    pot.execute("PLATE noodle orders (customer TEXT, total REAL);").unwrap();
+    pot.execute("LADLE INTO orders (customer, total) PORTIONS ('Tony', 10.0), ('Tony', 5.0), ('Maria', 20.0);").unwrap();
+
+    let r = pot.execute("SERVE customer, COUNT(*), SUM(total) FROM orders BUNDLED BY customer ARRANGED BY customer;").unwrap();
+    assert_eq!(r.rows, vec![
+        vec![Value::Text("Maria".to_string()), Value::Integer(1), Value::Real(20.0)],
+        vec![Value::Text("Tony".to_string()), Value::Integer(2), Value::Real(15.0)],
+    ]);
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_ungrouped_aggregate_over_empty_result_yields_zero_count() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle orders (total REAL);").unwrap();
+    let r = pot.execute("SERVE COUNT(*), SUM(total) FROM orders;").unwrap();
+    assert_eq!(r.rows, vec![vec![Value::Integer(0), Value::Null]]);
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_select_star_in_aggregate_context_rejected() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle orders (customer TEXT);").unwrap();
+    let err = pot.execute("SERVE * FROM orders BUNDLED BY customer;").unwrap_err();
+    assert!(matches!(err, Scottatura::ClauseNotYetSupported { .. }));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_ungrouped_column_in_aggregate_context_rejected() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle orders (customer TEXT, total REAL);").unwrap();
+    let err = pot.execute("SERVE customer, total, COUNT(*) FROM orders BUNDLED BY customer;").unwrap_err();
+    assert!(matches!(err, Scottatura::ColumnNotGroupedOrAggregated { name } if name == "total"));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_unknown_aggregate_function_rejected() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle orders (total REAL);").unwrap();
+    let err = pot.execute("SERVE MEDIAN(total) FROM orders;").unwrap_err();
+    assert!(matches!(err, Scottatura::UnknownAggregateFunction { name } if name == "MEDIAN"));
     std::fs::remove_file(&path).ok();
 }
 

@@ -337,6 +337,114 @@ fn project_values(items: &[SelectItem], schema: &Schema, row: &[Value]) -> Resul
     Ok(vals)
 }
 
+fn item_has_aggregate(item: &SelectItem) -> bool {
+    matches!(item, SelectItem::Expr { expr: Expr::FunctionCall { .. }, .. })
+}
+
+type Groups = Vec<(Vec<Value>, Vec<Vec<Value>>)>;
+
+/// Buckets rows by their `group_by` column values. Empty `group_by` means
+/// exactly one implicit group covering all rows (even zero rows) -- this
+/// is what makes `SELECT COUNT(*) FROM t` with no matches yield one row
+/// with `COUNT(*) = 0` rather than an empty result set.
+fn build_groups(group_by: &[String], schema: &Schema, rows: Vec<Vec<Value>>) -> Result<Groups, Scottatura> {
+    if group_by.is_empty() {
+        return Ok(vec![(vec![], rows)]);
+    }
+    let mut groups: Groups = Vec::new();
+    for row in rows {
+        let key: Vec<Value> = group_by.iter()
+            .map(|name| column_value(None, name, &row, schema))
+            .collect::<Result<_, _>>()?;
+        if let Some((_, bucket)) = groups.iter_mut().find(|(k, _)| *k == key) {
+            bucket.push(row);
+        } else {
+            groups.push((key, vec![row]));
+        }
+    }
+    Ok(groups)
+}
+
+fn eval_aggregate(name: &str, arg: Option<&Expr>, group_rows: &[Vec<Value>], schema: &Schema) -> Result<Value, Scottatura> {
+    match name.to_uppercase().as_str() {
+        "COUNT" => match arg {
+            None => Ok(Value::Integer(group_rows.len() as i64)),
+            Some(e) => {
+                let mut n = 0i64;
+                for row in group_rows {
+                    if !matches!(eval_scalar(e, row, schema)?, Value::Null) {
+                        n += 1;
+                    }
+                }
+                Ok(Value::Integer(n))
+            }
+        },
+        "SUM" | "AVG" => {
+            let e = arg.ok_or_else(|| Scottatura::UnknownAggregateFunction { name: name.to_string() })?;
+            let (mut sum, mut count, mut is_int) = (0f64, 0i64, true);
+            for row in group_rows {
+                match eval_scalar(e, row, schema)? {
+                    Value::Null => {}
+                    Value::Integer(i) => { sum += i as f64; count += 1; }
+                    Value::Real(r) => { sum += r; count += 1; is_int = false; }
+                    other => return Err(Scottatura::TypeMismatch {
+                        got: format!("{other:?}"), col: "<aggregate>".to_string(), expected: "INTEGER or REAL".to_string(),
+                    }),
+                }
+            }
+            if count == 0 {
+                return Ok(Value::Null);
+            }
+            if name.eq_ignore_ascii_case("SUM") {
+                Ok(if is_int { Value::Integer(sum as i64) } else { Value::Real(sum) })
+            } else {
+                Ok(Value::Real(sum / count as f64))
+            }
+        }
+        "MIN" | "MAX" => {
+            let e = arg.ok_or_else(|| Scottatura::UnknownAggregateFunction { name: name.to_string() })?;
+            let mut best: Option<Value> = None;
+            for row in group_rows {
+                let v = eval_scalar(e, row, schema)?;
+                if matches!(v, Value::Null) {
+                    continue;
+                }
+                best = Some(match best {
+                    None => v,
+                    Some(b) => {
+                        let ord = compare_values(&v, &b)?;
+                        let want_v = (name.eq_ignore_ascii_case("MIN") && ord == Ordering::Less)
+                            || (name.eq_ignore_ascii_case("MAX") && ord == Ordering::Greater);
+                        if want_v { v } else { b }
+                    }
+                });
+            }
+            Ok(best.unwrap_or(Value::Null))
+        }
+        other => Err(Scottatura::UnknownAggregateFunction { name: other.to_string() }),
+    }
+}
+
+fn project_grouped(items: &[SelectItem], group_by: &[String], schema: &Schema, key: &[Value], rows: &[Vec<Value>]) -> Result<Vec<Value>, Scottatura> {
+    let mut out = Vec::new();
+    for item in items {
+        match item {
+            SelectItem::Expr { expr: Expr::FunctionCall { name, arg }, .. } => {
+                out.push(eval_aggregate(name, arg.as_deref(), rows, schema)?);
+            }
+            SelectItem::Expr { expr: Expr::Column { name, .. }, .. } => {
+                let idx = group_by.iter().position(|g| g == name)
+                    .ok_or_else(|| Scottatura::ColumnNotGroupedOrAggregated { name: name.clone() })?;
+                out.push(key[idx].clone());
+            }
+            // sous_chef::validate_aggregate_context already rejects every other shape
+            // (Star, arbitrary expressions) before this code runs in aggregate context.
+            _ => return Err(Scottatura::ColumnNotGroupedOrAggregated { name: "<expression>".to_string() }),
+        }
+    }
+    Ok(out)
+}
+
 /// Nested-loop inner equi-join. Resolves both join-condition columns
 /// against the *combined* row/schema (not each side separately) so that
 /// `ON a.x = b.y` and `ON b.y = a.x` both work regardless of which side
@@ -413,7 +521,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
         }
-        Plan::Select { from, join, filter, group_by: _, columns, order_by, limit, offset } => {
+        Plan::Select { from, join, filter, group_by, columns, order_by, limit, offset } => {
             let (schema, rows): (Schema, Vec<Vec<Value>>) = if let Some(j) = &join {
                 scan_join(pot, &from, j)?
             } else {
@@ -423,16 +531,27 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
                 let r = pot.scan_noodle(&from.name)?.into_iter().map(|(k, v)| full_row(k, &v)).collect();
                 (s, r)
             };
-            let out_names = project_names(&columns, &schema);
-            let mut out_rows = Vec::new();
-            for row in &rows {
+            let mut filtered = Vec::new();
+            for row in rows {
                 if let Some(f) = &filter {
-                    if !eval_tri(f, row, &schema)?.is_true() {
+                    if !eval_tri(f, &row, &schema)?.is_true() {
                         continue;
                     }
                 }
-                out_rows.push(project_values(&columns, &schema, row)?);
+                filtered.push(row);
             }
+            let out_names = project_names(&columns, &schema);
+            let is_aggregate_context = !group_by.is_empty() || columns.iter().any(item_has_aggregate);
+            let mut out_rows = if is_aggregate_context {
+                let groups = build_groups(&group_by, &schema, filtered)?;
+                groups.iter()
+                    .map(|(key, rows)| project_grouped(&columns, &group_by, &schema, key, rows))
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                filtered.iter()
+                    .map(|row| project_values(&columns, &schema, row))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
             if !order_by.is_empty() {
                 sort_rows(&mut out_rows, &order_by, &out_names)?;
             }

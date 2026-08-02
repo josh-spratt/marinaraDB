@@ -28,17 +28,47 @@ pub enum Plan {
     DropTable { name: String },
 }
 
+fn item_is_aggregate(item: &SelectItem) -> bool {
+    matches!(item, SelectItem::Expr { expr: Expr::FunctionCall { .. }, .. })
+}
+
+fn validate_aggregate_context(sel: &crate::parser::ast::SelectStatement) -> Result<(), Scottatura> {
+    let is_aggregate_context = !sel.group_by.is_empty() || sel.items.iter().any(item_is_aggregate);
+    if !is_aggregate_context {
+        return Ok(());
+    }
+    for item in &sel.items {
+        match item {
+            SelectItem::Star => {
+                return Err(Scottatura::ClauseNotYetSupported { clause: "* with BUNDLED BY/aggregates".to_string() });
+            }
+            SelectItem::Expr { expr: Expr::FunctionCall { name, .. }, .. } => {
+                if !matches!(name.to_uppercase().as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX") {
+                    return Err(Scottatura::UnknownAggregateFunction { name: name.clone() });
+                }
+            }
+            SelectItem::Expr { expr: Expr::Column { name, .. }, .. } => {
+                if !sel.group_by.iter().any(|g| g == name) {
+                    return Err(Scottatura::ColumnNotGroupedOrAggregated { name: name.clone() });
+                }
+            }
+            SelectItem::Expr { .. } => {
+                return Err(Scottatura::ColumnNotGroupedOrAggregated { name: "<expression>".to_string() });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
     match stmt {
         Statement::Select(sel) => {
+            validate_aggregate_context(&sel)?;
             let join = sel.join.map(|j: JoinClause| JoinPlan {
                 table: j.table,
                 left_col: j.left_col,
                 right_col: j.right_col,
             });
-            if !sel.group_by.is_empty() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "BUNDLED BY".to_string() });
-            }
             Ok(Plan::Select {
                 from: sel.from,
                 join,
@@ -151,5 +181,18 @@ mod tests {
     fn test_begin_simmer_rejected() {
         let stmt = parse_statement("BEGIN SIMMER;").unwrap();
         assert!(matches!(plan(stmt).unwrap_err(), Scottatura::TransactionNotSupported));
+    }
+
+    #[test]
+    fn test_group_by_passthrough() {
+        let stmt = parse_statement("SERVE age, COUNT(*) FROM users BUNDLED BY age;").unwrap();
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { group_by, .. } if group_by == vec!["age".to_string()]));
+    }
+
+    #[test]
+    fn test_star_with_group_by_rejected_at_plan_time() {
+        let stmt = parse_statement("SERVE * FROM users BUNDLED BY age;").unwrap();
+        assert!(matches!(plan(stmt).unwrap_err(), Scottatura::ClauseNotYetSupported { .. }));
     }
 }
