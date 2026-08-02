@@ -374,7 +374,7 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
         }
-        Plan::Select { from, join: _, filter, group_by: _, columns, order_by, limit: _, offset: _ } => {
+        Plan::Select { from, join: _, filter, group_by: _, columns, order_by, limit, offset } => {
             let recipe = pot.recipe(&from.name)?;
             let schema = full_schema(&from.name, &recipe.columns);
             let raw_rows = pot.scan_noodle(&from.name)?;
@@ -391,6 +391,11 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             if !order_by.is_empty() {
                 sort_rows(&mut out_rows, &order_by, &out_names)?;
+            }
+            let skip_n = offset.unwrap_or(0).max(0) as usize;
+            out_rows = out_rows.into_iter().skip(skip_n).collect();
+            if let Some(l) = limit {
+                out_rows.truncate(l.max(0) as usize);
             }
             let n = out_rows.len() as u64;
             Ok(ResultSet { columns: out_names, rows: out_rows, affected_rows: n, last_insert_key: None })

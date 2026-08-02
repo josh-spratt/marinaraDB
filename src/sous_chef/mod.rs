@@ -34,9 +34,6 @@ pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
             if sel.join.is_some() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "TOSS (join)".to_string() });
             }
-            if sel.limit.is_some() || sel.offset.is_some() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "ONLY / SKIP".to_string() });
-            }
             if !sel.group_by.is_empty() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "BUNDLED BY".to_string() });
             }
@@ -97,10 +94,10 @@ mod tests {
     }
 
     #[test]
-    fn test_limit_rejected() {
-        let stmt = parse_statement("SERVE * FROM users ONLY 10;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "ONLY / SKIP"));
+    fn test_limit_offset_passthrough() {
+        let stmt = parse_statement("SERVE * FROM users ONLY 10 SKIP 5;").unwrap();
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { limit: Some(10), offset: Some(5), .. }));
     }
 
     #[test]

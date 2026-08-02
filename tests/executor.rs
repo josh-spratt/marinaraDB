@@ -63,18 +63,33 @@ fn test_join_returns_clause_not_yet_supported() {
 }
 
 #[test]
-fn test_limit_and_bundled_by_still_return_clause_not_yet_supported() {
+fn test_bundled_by_still_returns_clause_not_yet_supported() {
     let path = temp_path();
     let mut pot = Pot::open(&path).unwrap();
     pot.execute("PLATE noodle users (age INT);").unwrap();
     assert!(matches!(
-        pot.execute("SERVE * FROM users ONLY 10;").unwrap_err(),
-        Scottatura::ClauseNotYetSupported { .. }
-    ));
-    assert!(matches!(
         pot.execute("SERVE age FROM users BUNDLED BY age;").unwrap_err(),
         Scottatura::ClauseNotYetSupported { .. }
     ));
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_only_and_skip_apply_after_ordering() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle nums (n INT);").unwrap();
+    for i in 0..10 {
+        pot.execute(&format!("LADLE INTO nums (n) PORTIONS ({i});")).unwrap();
+    }
+    let r = pot.execute("SERVE n FROM nums ARRANGED BY n ONLY 3 SKIP 2;").unwrap();
+    assert_eq!(r.rows, vec![vec![Value::Integer(2)], vec![Value::Integer(3)], vec![Value::Integer(4)]]);
+
+    let r = pot.execute("SERVE n FROM nums ARRANGED BY n ONLY 0;").unwrap();
+    assert!(r.rows.is_empty());
+
+    let r = pot.execute("SERVE n FROM nums ARRANGED BY n ONLY 10 SKIP 100;").unwrap();
+    assert!(r.rows.is_empty());
     std::fs::remove_file(&path).ok();
 }
 
