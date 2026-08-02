@@ -72,6 +72,7 @@ impl PrepLog {
         };
         let encoded = record.encode();
         self.file.write_all(&encoded).map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+        self.file.sync_all().map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
         self.next_lsn += 1;
 
         tray.flush_all(pot_file)?;
