@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use crate::parser::ast::{BinOp, Expr};
+use crate::parser::ast::{BinOp, Expr, TableRef};
 use crate::{ColType, ColumnDef, Scottatura, Value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -290,7 +290,7 @@ pub(crate) fn eval_tri(expr: &Expr, row: &[Value], schema: &Schema) -> Result<Tr
 }
 
 use crate::parser::ast::SelectItem;
-use crate::sous_chef::Plan;
+use crate::sous_chef::{JoinPlan, Plan};
 use crate::stove::pot::Pot;
 use crate::ResultSet;
 
@@ -337,6 +337,45 @@ fn project_values(items: &[SelectItem], schema: &Schema, row: &[Value]) -> Resul
     Ok(vals)
 }
 
+/// Nested-loop inner equi-join. Resolves both join-condition columns
+/// against the *combined* row/schema (not each side separately) so that
+/// `ON a.x = b.y` and `ON b.y = a.x` both work regardless of which side
+/// `left_col`/`right_col` names, and so qualifier ambiguity is caught the
+/// same way it is for any other column reference.
+fn scan_join(pot: &mut Pot, from: &TableRef, j: &JoinPlan) -> Result<(Schema, Vec<Vec<Value>>), Scottatura> {
+    let left_recipe = pot.recipe(&from.name)?;
+    let left_owner = from.alias.clone().unwrap_or_else(|| from.name.clone());
+    let left_schema = full_schema(&left_owner, &left_recipe.columns);
+    let left_rows: Vec<Vec<Value>> = pot.scan_noodle(&from.name)?
+        .into_iter().map(|(k, v)| full_row(k, &v)).collect();
+
+    let right_recipe = pot.recipe(&j.table.name)?;
+    let right_owner = j.table.alias.clone().unwrap_or_else(|| j.table.name.clone());
+    let right_schema = full_schema(&right_owner, &right_recipe.columns);
+    let right_rows: Vec<Vec<Value>> = pot.scan_noodle(&j.table.name)?
+        .into_iter().map(|(k, v)| full_row(k, &v)).collect();
+
+    let mut schema = left_schema;
+    schema.extend(right_schema);
+
+    let mut out = Vec::new();
+    for lrow in &left_rows {
+        for rrow in &right_rows {
+            let mut combined = lrow.clone();
+            combined.extend(rrow.iter().cloned());
+            let lv = column_value(j.left_col.0.as_deref(), &j.left_col.1, &combined, &schema)?;
+            let rv = column_value(j.right_col.0.as_deref(), &j.right_col.1, &combined, &schema)?;
+            if matches!(lv, Value::Null) || matches!(rv, Value::Null) {
+                continue;
+            }
+            if values_equal(&lv, &rv)? {
+                out.push(combined);
+            }
+        }
+    }
+    Ok((schema, out))
+}
+
 fn resolve_insert_values(table: &str, table_cols: &[ColumnDef], columns: &[String], row_exprs: &[Expr]) -> Result<Vec<Value>, Scottatura> {
     for name in columns {
         if !table_cols.iter().any(|c| &c.name == name) {
@@ -374,20 +413,25 @@ pub(crate) fn execute(plan: Plan, pot: &mut Pot) -> Result<ResultSet, Scottatura
             }
             Ok(ResultSet { columns: vec![], rows: vec![], affected_rows: n as u64, last_insert_key: last_key })
         }
-        Plan::Select { from, join: _, filter, group_by: _, columns, order_by, limit, offset } => {
-            let recipe = pot.recipe(&from.name)?;
-            let schema = full_schema(&from.name, &recipe.columns);
-            let raw_rows = pot.scan_noodle(&from.name)?;
+        Plan::Select { from, join, filter, group_by: _, columns, order_by, limit, offset } => {
+            let (schema, rows): (Schema, Vec<Vec<Value>>) = if let Some(j) = &join {
+                scan_join(pot, &from, j)?
+            } else {
+                let recipe = pot.recipe(&from.name)?;
+                let owner = from.alias.clone().unwrap_or_else(|| from.name.clone());
+                let s = full_schema(&owner, &recipe.columns);
+                let r = pot.scan_noodle(&from.name)?.into_iter().map(|(k, v)| full_row(k, &v)).collect();
+                (s, r)
+            };
             let out_names = project_names(&columns, &schema);
             let mut out_rows = Vec::new();
-            for (key, values) in raw_rows {
-                let row = full_row(key, &values);
+            for row in &rows {
                 if let Some(f) = &filter {
-                    if !eval_tri(f, &row, &schema)?.is_true() {
+                    if !eval_tri(f, row, &schema)?.is_true() {
                         continue;
                     }
                 }
-                out_rows.push(project_values(&columns, &schema, &row)?);
+                out_rows.push(project_values(&columns, &schema, row)?);
             }
             if !order_by.is_empty() {
                 sort_rows(&mut out_rows, &order_by, &out_names)?;

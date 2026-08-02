@@ -52,13 +52,33 @@ fn test_multi_page_insert_via_execute() {
 }
 
 #[test]
-fn test_join_returns_clause_not_yet_supported() {
+fn test_inner_join_combines_matching_rows() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle users (name TEXT);").unwrap();
+    pot.execute("PLATE noodle orders (user_id INT, total REAL);").unwrap();
+    pot.execute("LADLE INTO users (name) PORTIONS ('Tony'), ('Maria');").unwrap(); // ids 1, 2
+    pot.execute("LADLE INTO orders (user_id, total) PORTIONS (1, 12.5), (1, 3.0), (2, 7.0);").unwrap();
+
+    let r = pot.execute("SERVE u.name, o.total FROM users u TOSS orders o ON u.id = o.user_id STRAINED BY u.name = 'Tony';").unwrap();
+    assert_eq!(r.rows.len(), 2);
+    for row in &r.rows {
+        assert_eq!(row[0], Value::Text("Tony".to_string()));
+    }
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_join_unqualified_ambiguous_column_errors() {
     let path = temp_path();
     let mut pot = Pot::open(&path).unwrap();
     pot.execute("PLATE noodle users (name TEXT);").unwrap();
     pot.execute("PLATE noodle orders (user_id INT);").unwrap();
-    let err = pot.execute("SERVE * FROM users u TOSS orders o ON u.id = o.user_id;").unwrap_err();
-    assert!(matches!(err, Scottatura::ClauseNotYetSupported { .. }));
+    pot.execute("LADLE INTO users (name) PORTIONS ('Tony');").unwrap(); // id 1
+    pot.execute("LADLE INTO orders (user_id) PORTIONS (1);").unwrap();
+    // both sides have an `id` column (the Al Dente Key) -- unqualified `id` in STRAINED BY is ambiguous.
+    let err = pot.execute("SERVE * FROM users u TOSS orders o ON u.id = o.user_id STRAINED BY id = 1;").unwrap_err();
+    assert!(matches!(err, Scottatura::AmbiguousColumn { name } if name == "id"));
     std::fs::remove_file(&path).ok();
 }
 

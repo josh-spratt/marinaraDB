@@ -1,4 +1,4 @@
-use crate::parser::ast::{ColumnSpec, Expr, OrderByItem, SelectItem, Statement, TableRef};
+use crate::parser::ast::{ColumnSpec, Expr, JoinClause, OrderByItem, SelectItem, Statement, TableRef};
 use crate::Scottatura;
 
 #[derive(Debug, Clone)]
@@ -31,15 +31,17 @@ pub enum Plan {
 pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
     match stmt {
         Statement::Select(sel) => {
-            if sel.join.is_some() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "TOSS (join)".to_string() });
-            }
+            let join = sel.join.map(|j: JoinClause| JoinPlan {
+                table: j.table,
+                left_col: j.left_col,
+                right_col: j.right_col,
+            });
             if !sel.group_by.is_empty() {
                 return Err(Scottatura::ClauseNotYetSupported { clause: "BUNDLED BY".to_string() });
             }
             Ok(Plan::Select {
                 from: sel.from,
-                join: None,
+                join,
                 filter: sel.filter,
                 group_by: sel.group_by,
                 columns: sel.items,
@@ -80,10 +82,10 @@ mod tests {
     }
 
     #[test]
-    fn test_join_rejected() {
+    fn test_join_passthrough() {
         let stmt = parse_statement("SERVE * FROM users u TOSS orders o ON u.id = o.user_id;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "TOSS (join)"));
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { join: Some(j), .. } if j.table.name == "orders"));
     }
 
     #[test]
