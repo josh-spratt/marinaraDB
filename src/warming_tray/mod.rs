@@ -78,6 +78,10 @@ impl WarmingTray {
         self.cache.retain(|_, e| e.simmer_id != Some(simmer_id));
     }
 
+    pub fn invalidate(&mut self, page_num: u64) {
+        self.cache.remove(&page_num);
+    }
+
     pub fn stats(&self) -> CacheStats {
         self.stats
     }
@@ -142,6 +146,19 @@ mod tests {
         tray.mark_dirty(1, 55);
         tray.evict_simmer(55);
         // Re-fetch from disk (was never flushed)
+        let page = tray.fetch(1, &mut pot).unwrap();
+        assert_eq!(page.next_page(), 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_invalidate_drops_page_without_flush() {
+        let (mut pot, path) = make_pot_with_page();
+        let mut tray = WarmingTray::new(16);
+        let page = tray.fetch(1, &mut pot).unwrap();
+        page.set_next_page(99);
+        tray.invalidate(1);
+        // Re-fetch from disk — the mutation was never flushed, so it's gone.
         let page = tray.fetch(1, &mut pot).unwrap();
         assert_eq!(page.next_page(), 0);
         std::fs::remove_file(&path).ok();

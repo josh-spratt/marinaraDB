@@ -190,8 +190,14 @@ impl Pot {
     }
 
     fn log_and_flush(&mut self, page_num: u64, after_image: Vec<u8>) -> Result<(), Scottatura> {
-        self.prep_log.append_write(0, page_num, 0, &after_image)?;
-        self.prep_log.append_commit(0)?;
+        if let Err(e) = self.prep_log.append_write(0, page_num, 0, &after_image) {
+            self.tray.invalidate(page_num);
+            return Err(e);
+        }
+        if let Err(e) = self.prep_log.append_commit(0) {
+            self.tray.invalidate(page_num);
+            return Err(e);
+        }
         self.tray.mark_dirty(page_num, 0);
         self.tray.flush_simmer(0, &mut self.pot_file)?;
         if self.prep_log.should_checkpoint() {

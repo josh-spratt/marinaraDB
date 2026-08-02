@@ -64,6 +64,14 @@ impl PotFile {
         self.flush_header()
     }
 
+    pub fn ensure_page_count(&mut self, min_count: u64) -> Result<(), Scottatura> {
+        if min_count > self.page_count {
+            self.page_count = min_count;
+            self.flush_header()?;
+        }
+        Ok(())
+    }
+
     pub fn read_page(&mut self, page_num: u64) -> Result<Page, Scottatura> {
         self.file.seek(SeekFrom::Start(page_num * PAGE_SIZE as u64))?;
         let mut data = [0u8; PAGE_SIZE];
@@ -175,6 +183,22 @@ mod tests {
         }
         let pot2 = PotFile::open(&path).unwrap();
         assert_eq!(pot2.root_catalog_page(), 5);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_ensure_page_count_raises_and_persists() {
+        let path = fresh_path();
+        {
+            let mut pot = PotFile::create(&path).unwrap();
+            assert_eq!(pot.page_count(), 1);
+            pot.ensure_page_count(5).unwrap();
+            assert_eq!(pot.page_count(), 5);
+            pot.ensure_page_count(3).unwrap(); // lower value must not shrink it
+            assert_eq!(pot.page_count(), 5);
+        }
+        let pot2 = PotFile::open(&path).unwrap();
+        assert_eq!(pot2.page_count(), 5);
         std::fs::remove_file(&path).ok();
     }
 }

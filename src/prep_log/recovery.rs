@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 
 use crate::prep_log::record::{LogRecord, RecordType};
@@ -12,8 +12,8 @@ pub fn recover(pot_file: &mut PotFile, prep_path: &str) -> Result<u64, Scottatur
         Err(_) => return Ok(1),
     };
 
-    let mut committed: HashSet<u64> = HashSet::new();
-    let mut pending: Vec<LogRecord> = Vec::new();
+    let mut pending_by_simmer: HashMap<u64, Vec<LogRecord>> = HashMap::new();
+    let mut to_replay: Vec<LogRecord> = Vec::new();
     let mut max_lsn = 0u64;
     let mut cursor = 0usize;
 
@@ -23,16 +23,20 @@ pub fn recover(pot_file: &mut PotFile, prep_path: &str) -> Result<u64, Scottatur
                 max_lsn = max_lsn.max(record.lsn);
                 match record.record_type {
                     RecordType::Checkpoint => {
-                        pending.clear();
-                        committed.clear();
+                        pending_by_simmer.clear();
+                        to_replay.clear();
                     }
                     RecordType::Commit => {
-                        committed.insert(record.simmer_id);
+                        if let Some(writes) = pending_by_simmer.remove(&record.simmer_id) {
+                            to_replay.extend(writes);
+                        }
                     }
                     RecordType::Write => {
-                        pending.push(record);
+                        pending_by_simmer.entry(record.simmer_id).or_default().push(record);
                     }
-                    RecordType::Rollback => {}
+                    RecordType::Rollback => {
+                        pending_by_simmer.remove(&record.simmer_id);
+                    }
                 }
                 cursor += consumed;
             }
@@ -40,12 +44,19 @@ pub fn recover(pot_file: &mut PotFile, prep_path: &str) -> Result<u64, Scottatur
         }
     }
 
-    for record in pending {
-        if committed.contains(&record.simmer_id) && record.after_image.len() == PAGE_SIZE {
+    to_replay.sort_by_key(|r| r.lsn);
+
+    let mut max_replayed_page = 0u64;
+    for record in &to_replay {
+        if record.after_image.len() == PAGE_SIZE {
             let mut data = [0u8; PAGE_SIZE];
             data.copy_from_slice(&record.after_image);
             pot_file.write_page(&Page { number: record.page_num, data })?;
+            max_replayed_page = max_replayed_page.max(record.page_num);
         }
+    }
+    if max_replayed_page > 0 {
+        pot_file.ensure_page_count(max_replayed_page + 1)?;
     }
 
     pot_file.sync_all()?;

@@ -100,6 +100,65 @@ fn test_checkpoint_shrinks_prep_log_file() {
     assert!(size_after < 500_000, "expected checkpoint to shrink the log, got {size_after} bytes");
 
     drop(pot);
+
+    let mut reopened = Pot::open(&path).unwrap();
+    let rows = reopened.scan_noodle("nums").unwrap();
+    assert_eq!(rows.len(), 520);
+
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&prep_path).ok();
+}
+
+#[test]
+fn test_uncommitted_write_after_committed_predecessor_is_not_replayed() {
+    use marinaradb::prep_log::record::LogRecord;
+
+    let path = temp_path();
+    let prep_path = format!("{path}.prep");
+
+    // Both inserts must happen in ONE session: `Pot::open` reinitializes the
+    // .prep file after recovery, so a second session's log would not contain
+    // the first insert's Commit — and it's precisely that earlier Commit under
+    // the reused autocommit Simmer ID `0` that used to poison the replay.
+    let snapshot_after_first = {
+        let mut pot = Pot::open(&path).unwrap();
+        pot.create_table("nums", nums_col()).unwrap();
+        pot.insert_strand("nums", vec![Value::Integer(111)]).unwrap();
+
+        // Snapshot page 2 right after the first (committed) insert, before the
+        // second insert touches it.
+        let snapshot = {
+            let mut raw = PotFile::open(&path).unwrap();
+            raw.read_page(2).unwrap().data
+        };
+
+        pot.insert_strand("nums", vec![Value::Integer(222)]).unwrap();
+        snapshot
+    };
+
+    // Simulate a crash between the second insert's write record and its
+    // commit record: truncate the .prep file right before the fourth
+    // record (the second insert's Commit — records on disk are Write1,
+    // Commit1, Write2, Commit2), and roll .pot's page 2 back to its
+    // pre-second-insert state, as if that flush never happened either.
+    let prep_bytes = std::fs::read(&prep_path).unwrap();
+    let mut cursor = 0usize;
+    for _ in 0..3 {
+        let (_, consumed) = LogRecord::decode(&prep_bytes[cursor..]).unwrap().unwrap();
+        cursor += consumed;
+    }
+    std::fs::write(&prep_path, &prep_bytes[..cursor]).unwrap();
+
+    {
+        let mut raw = PotFile::open(&path).unwrap();
+        raw.write_page(&Page { number: 2, data: snapshot_after_first }).unwrap();
+    }
+
+    let mut pot = Pot::open(&path).unwrap();
+    let rows = pot.scan_noodle("nums").unwrap();
+    assert_eq!(rows.len(), 1, "the second insert never committed and must not be replayed, even though Simmer ID 0 committed earlier in the log");
+    assert_eq!(rows[0].1[0], Value::Integer(111));
+
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(&prep_path).ok();
 }
