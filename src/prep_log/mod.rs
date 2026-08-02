@@ -2,8 +2,11 @@ pub mod record;
 
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
+use std::io::{Seek, SeekFrom};
 
 use crate::Scottatura;
+use crate::stove::pot_file::PotFile;
+use crate::warming_tray::WarmingTray;
 use record::{LogRecord, RecordType, CHECKPOINT_THRESHOLD};
 
 pub struct PrepLog {
@@ -59,6 +62,28 @@ impl PrepLog {
 
     pub fn should_checkpoint(&self) -> bool {
         self.since_checkpoint >= CHECKPOINT_THRESHOLD
+    }
+
+    pub fn checkpoint(&mut self, tray: &mut WarmingTray, pot_file: &mut PotFile) -> Result<(), Scottatura> {
+        let checkpoint_lsn = self.next_lsn;
+        let record = LogRecord {
+            lsn: checkpoint_lsn, simmer_id: 0, record_type: RecordType::Checkpoint,
+            page_num: 0, offset: 0, after_image: checkpoint_lsn.to_le_bytes().to_vec(),
+        };
+        let encoded = record.encode();
+        self.file.write_all(&encoded).map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+        self.next_lsn += 1;
+
+        tray.flush_all(pot_file)?;
+        pot_file.sync_all()?;
+
+        self.file.set_len(0).map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+        self.file.seek(SeekFrom::Start(0)).map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+        self.file.write_all(&encoded).map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+        self.file.sync_all().map_err(|e| Scottatura::PrepLogIoError { message: e.to_string() })?;
+
+        self.since_checkpoint = 0;
+        Ok(())
     }
 
     fn write_record(&mut self, record: &LogRecord) -> Result<(), Scottatura> {
@@ -138,5 +163,53 @@ mod tests {
         log.append_rollback(0).unwrap();
         assert!(log.should_checkpoint());
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_checkpoint_record_shape() {
+        let path = fresh_path();
+        let mut log = PrepLog::init(&path, 1).unwrap();
+        log.append_rollback(0).unwrap(); // lsn 1
+
+        let pot_path = fresh_path();
+        let mut pot_file = PotFile::create(&pot_path).unwrap();
+        let mut tray = WarmingTray::new(16);
+
+        log.checkpoint(&mut tray, &mut pot_file).unwrap();
+
+        let bytes = std::fs::read(&path).unwrap();
+        let (rec, consumed) = LogRecord::decode(&bytes).unwrap().unwrap();
+        assert_eq!(rec.record_type, RecordType::Checkpoint);
+        assert_eq!(rec.lsn, 2);
+        assert_eq!(consumed, bytes.len());
+        assert!(!log.should_checkpoint());
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&pot_path).ok();
+    }
+
+    #[test]
+    fn test_records_after_checkpoint_retained_earlier_dropped() {
+        let path = fresh_path();
+        let mut log = PrepLog::init(&path, 1).unwrap();
+        log.append_rollback(0).unwrap(); // lsn 1 — dropped by the checkpoint
+
+        let pot_path = fresh_path();
+        let mut pot_file = PotFile::create(&pot_path).unwrap();
+        let mut tray = WarmingTray::new(16);
+        log.checkpoint(&mut tray, &mut pot_file).unwrap(); // lsn 2 — retained
+
+        log.append_rollback(0).unwrap(); // lsn 3 — appended after, retained
+
+        let bytes = std::fs::read(&path).unwrap();
+        let (first, consumed) = LogRecord::decode(&bytes).unwrap().unwrap();
+        assert_eq!(first.record_type, RecordType::Checkpoint);
+        assert_eq!(first.lsn, 2);
+        let (second, _) = LogRecord::decode(&bytes[consumed..]).unwrap().unwrap();
+        assert_eq!(second.record_type, RecordType::Rollback);
+        assert_eq!(second.lsn, 3);
+
+        std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&pot_path).ok();
     }
 }

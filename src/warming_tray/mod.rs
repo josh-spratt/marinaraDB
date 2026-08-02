@@ -63,6 +63,17 @@ impl WarmingTray {
         Ok(())
     }
 
+    pub fn flush_all(&mut self, file: &mut PotFile) -> Result<(), Scottatura> {
+        for entry in self.cache.values_mut() {
+            if entry.dirty {
+                file.write_page(&entry.page)?;
+                entry.dirty = false;
+                entry.simmer_id = None;
+            }
+        }
+        Ok(())
+    }
+
     pub fn evict_simmer(&mut self, simmer_id: u64) {
         self.cache.retain(|_, e| e.simmer_id != Some(simmer_id));
     }
@@ -133,6 +144,23 @@ mod tests {
         // Re-fetch from disk (was never flushed)
         let page = tray.fetch(1, &mut pot).unwrap();
         assert_eq!(page.next_page(), 0);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_flush_all_flushes_multiple_simmers() {
+        let (mut pot, path) = make_pot_with_page(); // page 1
+        pot.allocate_page(PageType::Heap).unwrap(); // page 2
+        let mut tray = WarmingTray::new(16);
+        tray.fetch(1, &mut pot).unwrap().set_next_page(11);
+        tray.mark_dirty(1, 1);
+        tray.fetch(2, &mut pot).unwrap().set_next_page(22);
+        tray.mark_dirty(2, 2);
+
+        tray.flush_all(&mut pot).unwrap();
+
+        assert_eq!(pot.read_page(1).unwrap().next_page(), 11);
+        assert_eq!(pot.read_page(2).unwrap().next_page(), 22);
         std::fs::remove_file(&path).ok();
     }
 

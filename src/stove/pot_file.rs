@@ -86,6 +86,11 @@ impl PotFile {
         Ok(page)
     }
 
+    pub fn sync_all(&self) -> Result<(), Scottatura> {
+        self.file.sync_all()?;
+        Ok(())
+    }
+
     fn flush_header(&mut self) -> Result<(), Scottatura> {
         self.file.seek(SeekFrom::Start(0))?;
         let mut header = [0u8; PAGE_SIZE];
@@ -150,6 +155,14 @@ mod tests {
 
         let p2 = pot.read_page(1).unwrap();
         assert_eq!(p2.next_page(), 77);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn test_sync_all_succeeds() {
+        let path = fresh_path();
+        let pot = PotFile::create(&path).unwrap();
+        pot.sync_all().unwrap();
         std::fs::remove_file(&path).ok();
     }
 
