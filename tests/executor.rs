@@ -227,3 +227,27 @@ fn test_not_null_violation_through_execute() {
     assert!(matches!(err, Scottatura::NullConstraintViolation { .. }) || matches!(err, Scottatura::UnexpectedToken { .. }));
     std::fs::remove_file(&path).ok();
 }
+
+#[test]
+fn test_join_group_order_limit_combined() {
+    let path = temp_path();
+    let mut pot = Pot::open(&path).unwrap();
+    pot.execute("PLATE noodle customers (name TEXT);").unwrap();
+    pot.execute("PLATE noodle orders (customer_id INT, total REAL);").unwrap();
+    pot.execute("LADLE INTO customers (name) PORTIONS ('Tony'), ('Maria'), ('Gino');").unwrap(); // ids 1,2,3
+    pot.execute("LADLE INTO orders (customer_id, total) PORTIONS (1, 10.0), (1, 5.0), (2, 100.0), (3, 1.0);").unwrap();
+
+    // `BUNDLED BY` only accepts a single bare identifier (src/parser/mod.rs's
+    // group_by parsing calls `expect_ident()`, which does not accept dotted
+    // `table.column` syntax) -- use the unqualified column name. It's
+    // unambiguous here because only `customers` has a `name` column.
+    let r = pot.execute(
+        "SERVE c.name, SUM(o.total) FROM customers c TOSS orders o ON c.id = o.customer_id \
+         BUNDLED BY name ARRANGED BY name ONLY 2;"
+    ).unwrap();
+    assert_eq!(r.rows, vec![
+        vec![Value::Text("Gino".to_string()), Value::Real(1.0)],
+        vec![Value::Text("Maria".to_string()), Value::Real(100.0)],
+    ]);
+    std::fs::remove_file(&path).ok();
+}

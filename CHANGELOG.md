@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-page heap traversal — heap storage now chains across pages via `next_page` instead of capping a table at one page
 - `RICETTA_005`, `EXEC_001`–`EXEC_003` Scottatura error codes
 - `examples/trattoria_seed.sauql` — sample seed data (18 customers, 18 dishes, 40 orders) for a fictional Italian restaurant, runnable via `cargo run -- demo.pot < examples/trattoria_seed.sauql`
+- `TOSS` (inner equi-join) — nested-loop join with qualifier-aware column resolution (`table.column`) and ambiguous-unqualified-column detection
+- `ARRANGED BY` (ORDER BY) — multi-key sort with VUOTO always sorting first regardless of ASC/DESC
+- `ONLY` / `SKIP` (LIMIT / OFFSET), applied after ordering
+- `BUNDLED BY` (GROUP BY) and aggregate functions `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, with strict validation rejecting `SELECT *` and ungrouped/unaggregated columns in aggregate-context queries
+- `AmbiguousColumn`, `ColumnNotGroupedOrAggregated`, `UnknownAggregateFunction` Scottatura error variants (RICETTA_010, RICETTA_011, EXEC_004)
 
 ## [0.1.0] - 2026-06-28
 
