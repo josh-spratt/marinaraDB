@@ -1,9 +1,26 @@
-use crate::parser::ast::{ColumnSpec, Expr, SelectItem, Statement};
+use crate::parser::ast::{ColumnSpec, Expr, JoinClause, OrderByItem, SelectItem, Statement, TableRef};
 use crate::Scottatura;
 
 #[derive(Debug, Clone)]
+pub struct JoinPlan {
+    pub table: TableRef,
+    pub left_col: (Option<String>, String),
+    pub right_col: (Option<String>, String),
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // Select is inherently larger; boxing would ripple indirection into every match site
 pub enum Plan {
-    SeqScan { table: String, columns: Vec<SelectItem>, filter: Option<Expr> },
+    Select {
+        from: TableRef,
+        join: Option<JoinPlan>,
+        filter: Option<Expr>,
+        group_by: Vec<String>,
+        columns: Vec<SelectItem>,
+        order_by: Vec<OrderByItem>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    },
     Insert { table: String, columns: Vec<String>, rows: Vec<Vec<Expr>> },
     Update { table: String, assignments: Vec<(String, Expr)>, filter: Expr },
     Delete { table: String, filter: Expr },
@@ -11,22 +28,57 @@ pub enum Plan {
     DropTable { name: String },
 }
 
+fn item_is_aggregate(item: &SelectItem) -> bool {
+    matches!(item, SelectItem::Expr { expr: Expr::FunctionCall { .. }, .. })
+}
+
+fn validate_aggregate_context(sel: &crate::parser::ast::SelectStatement) -> Result<(), Scottatura> {
+    let is_aggregate_context = !sel.group_by.is_empty() || sel.items.iter().any(item_is_aggregate);
+    if !is_aggregate_context {
+        return Ok(());
+    }
+    for item in &sel.items {
+        match item {
+            SelectItem::Star => {
+                return Err(Scottatura::ClauseNotYetSupported { clause: "* with BUNDLED BY/aggregates".to_string() });
+            }
+            SelectItem::Expr { expr: Expr::FunctionCall { name, .. }, .. } => {
+                if !matches!(name.to_uppercase().as_str(), "COUNT" | "SUM" | "AVG" | "MIN" | "MAX") {
+                    return Err(Scottatura::UnknownAggregateFunction { name: name.clone() });
+                }
+            }
+            SelectItem::Expr { expr: Expr::Column { name, .. }, .. } => {
+                if !sel.group_by.iter().any(|g| g == name) {
+                    return Err(Scottatura::ColumnNotGroupedOrAggregated { name: name.clone() });
+                }
+            }
+            SelectItem::Expr { .. } => {
+                return Err(Scottatura::ColumnNotGroupedOrAggregated { name: "<expression>".to_string() });
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn plan(stmt: Statement) -> Result<Plan, Scottatura> {
     match stmt {
         Statement::Select(sel) => {
-            if sel.join.is_some() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "TOSS (join)".to_string() });
-            }
-            if !sel.order_by.is_empty() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "ARRANGED BY".to_string() });
-            }
-            if sel.limit.is_some() || sel.offset.is_some() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "ONLY / SKIP".to_string() });
-            }
-            if !sel.group_by.is_empty() {
-                return Err(Scottatura::ClauseNotYetSupported { clause: "BUNDLED BY".to_string() });
-            }
-            Ok(Plan::SeqScan { table: sel.from.name, columns: sel.items, filter: sel.filter })
+            validate_aggregate_context(&sel)?;
+            let join = sel.join.map(|j: JoinClause| JoinPlan {
+                table: j.table,
+                left_col: j.left_col,
+                right_col: j.right_col,
+            });
+            Ok(Plan::Select {
+                from: sel.from,
+                join,
+                filter: sel.filter,
+                group_by: sel.group_by,
+                columns: sel.items,
+                order_by: sel.order_by,
+                limit: sel.limit,
+                offset: sel.offset,
+            })
         }
         Statement::Insert { table, columns, rows } => Ok(Plan::Insert { table, columns, rows }),
         Statement::Update { table, assignments, filter } => Ok(Plan::Update { table, assignments, filter }),
@@ -46,38 +98,38 @@ mod tests {
     use crate::parser::parse_statement;
 
     #[test]
-    fn test_select_becomes_seqscan() {
+    fn test_select_becomes_select_plan() {
         let stmt = parse_statement("SERVE * FROM users STRAINED BY age > 18;").unwrap();
         let p = plan(stmt).unwrap();
-        assert!(matches!(p, Plan::SeqScan { table, .. } if table == "users"));
+        assert!(matches!(p, Plan::Select { from, .. } if from.name == "users"));
     }
 
     #[test]
     fn test_select_without_filter() {
         let stmt = parse_statement("SERVE * FROM users;").unwrap();
         let p = plan(stmt).unwrap();
-        assert!(matches!(p, Plan::SeqScan { filter: None, .. }));
+        assert!(matches!(p, Plan::Select { filter: None, .. }));
     }
 
     #[test]
-    fn test_join_rejected() {
+    fn test_join_passthrough() {
         let stmt = parse_statement("SERVE * FROM users u TOSS orders o ON u.id = o.user_id;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "TOSS (join)"));
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { join: Some(j), .. } if j.table.name == "orders"));
     }
 
     #[test]
-    fn test_order_by_rejected() {
+    fn test_order_by_passthrough() {
         let stmt = parse_statement("SERVE * FROM users ARRANGED BY age;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "ARRANGED BY"));
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { order_by, .. } if order_by.len() == 1 && order_by[0].column == "age" && !order_by[0].descending));
     }
 
     #[test]
-    fn test_limit_rejected() {
-        let stmt = parse_statement("SERVE * FROM users ONLY 10;").unwrap();
-        let err = plan(stmt).unwrap_err();
-        assert!(matches!(err, Scottatura::ClauseNotYetSupported { clause } if clause == "ONLY / SKIP"));
+    fn test_limit_offset_passthrough() {
+        let stmt = parse_statement("SERVE * FROM users ONLY 10 SKIP 5;").unwrap();
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { limit: Some(10), offset: Some(5), .. }));
     }
 
     #[test]
@@ -129,5 +181,18 @@ mod tests {
     fn test_begin_simmer_rejected() {
         let stmt = parse_statement("BEGIN SIMMER;").unwrap();
         assert!(matches!(plan(stmt).unwrap_err(), Scottatura::TransactionNotSupported));
+    }
+
+    #[test]
+    fn test_group_by_passthrough() {
+        let stmt = parse_statement("SERVE age, COUNT(*) FROM users BUNDLED BY age;").unwrap();
+        let p = plan(stmt).unwrap();
+        assert!(matches!(p, Plan::Select { group_by, .. } if group_by == vec!["age".to_string()]));
+    }
+
+    #[test]
+    fn test_star_with_group_by_rejected_at_plan_time() {
+        let stmt = parse_statement("SERVE * FROM users BUNDLED BY age;").unwrap();
+        assert!(matches!(plan(stmt).unwrap_err(), Scottatura::ClauseNotYetSupported { .. }));
     }
 }

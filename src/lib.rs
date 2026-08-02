@@ -67,6 +67,9 @@ pub enum Scottatura {
     #[error("Scottatura [RICETTA_003]: Ingredient `{col}` not found in noodle `{name}`.")]
     ColumnNotFound { col: String, name: String },
 
+    #[error("Scottatura [RICETTA_010]: Ingredient `{name}` is ambiguous — it exists in more than one noodle in this TOSS. If this clause supports qualified names (e.g. `table.{name}`), use one to disambiguate.")]
+    AmbiguousColumn { name: String },
+
     #[error("Scottatura [TIPO_001]: Cannot store {got} value in ingredient `{col}` (expected {expected}).")]
     TypeMismatch { got: String, col: String, expected: String },
 
@@ -132,4 +135,10 @@ pub enum Scottatura {
 
     #[error("Scottatura [EXEC_003]: Strainer indexes (STRAIN / REMOVE STRAINER) are not supported yet.")]
     StrainerNotSupported,
+
+    #[error("Scottatura [RICETTA_011]: Ingredient `{name}` is neither in BUNDLED BY nor wrapped in an aggregate function.")]
+    ColumnNotGroupedOrAggregated { name: String },
+
+    #[error("Scottatura [EXEC_004]: Unknown aggregate function `{name}`. Supported: COUNT, SUM, AVG, MIN, MAX.")]
+    UnknownAggregateFunction { name: String },
 }

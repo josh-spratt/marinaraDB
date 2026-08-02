@@ -201,7 +201,7 @@ impl Parser {
             }
             Token::Ident(name) => {
                 self.advance();
-                if self.check(&Token::LParen) && is_aggregate_fn(&name) {
+                if self.check(&Token::LParen) {
                     self.advance();
                     let arg = if self.check(&Token::Star) {
                         self.advance();
@@ -510,10 +510,6 @@ impl Parser {
             Ok((None, first))
         }
     }
-}
-
-fn is_aggregate_fn(name: &str) -> bool {
-    matches!(name.to_ascii_uppercase().as_str(), "COUNT" | "SUM" | "MIN" | "MAX" | "AVG")
 }
 
 fn is_outer_join_modifier(word: &str) -> bool {

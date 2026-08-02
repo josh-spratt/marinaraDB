@@ -11,11 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Interactive REPL (`cargo run`) — a `psql`/`sqlite3`-style terminal session over `Pot::execute`, with `.tables`/`.help`/`.quit` dot-commands
 - `Pot::execute(sauql: &str) -> Result<ResultSet, Scottatura>` — parses, plans, and executes a SaucQL statement end-to-end
-- Sous Chef planner (`sous_chef::plan`) — translates parsed statements into an executable `Plan`, rejecting joins/`ARRANGED BY`/`ONLY`/`SKIP`/`BUNDLED BY`/transactions/Strainer DDL with clear `EXEC_*` errors
+- Sous Chef planner (`sous_chef::plan`) — translates parsed statements into an executable `Plan`, rejecting transactions/Strainer DDL with clear `EXEC_*` errors
 - Stove executor — single-table `SERVE`/`LADLE INTO`/`SEASON`/`DISCARD FROM` with full `STRAINED BY` expression support (comparisons, `AND`/`OR`/`NOT`, `IS VUOTO`, `BETWEEN`, `LIKE`, `IN`, three-valued VUOTO logic, `INTEGER`→`REAL` coercion)
 - Multi-page heap traversal — heap storage now chains across pages via `next_page` instead of capping a table at one page
 - `RICETTA_005`, `EXEC_001`–`EXEC_003` Scottatura error codes
 - `examples/trattoria_seed.sauql` — sample seed data (18 customers, 18 dishes, 40 orders) for a fictional Italian restaurant, runnable via `cargo run -- demo.pot < examples/trattoria_seed.sauql`
+- `TOSS` (inner equi-join) — nested-loop join with qualifier-aware column resolution (`table.column`) and ambiguous-unqualified-column detection
+- `ARRANGED BY` (ORDER BY) — multi-key sort with VUOTO always sorting first regardless of ASC/DESC
+- `ONLY` / `SKIP` (LIMIT / OFFSET), applied after ordering
+- `BUNDLED BY` (GROUP BY) and aggregate functions `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, with strict validation rejecting `SELECT *` and ungrouped/unaggregated columns in aggregate-context queries
+- `AmbiguousColumn`, `ColumnNotGroupedOrAggregated`, `UnknownAggregateFunction` Scottatura error variants (RICETTA_010, RICETTA_011, EXEC_004)
+- Scope note: `ARRANGED BY` currently requires the ordered column to appear in the query's own SELECT list/projection — ordering by a column that exists in the source table but wasn't selected is not yet supported (raises `ColumnNotFound`). Candidate for a future phase.
+- Scope note: `BUNDLED BY` only accepts a single bare unqualified column name (no `table.column` syntax) — grouping a joined query by a column name that exists identically in more than one joined table (e.g. every table's implicit `id`) is not currently expressible and raises `AmbiguousColumn`. Candidate for a future phase.
 
 ## [0.1.0] - 2026-06-28
 

@@ -65,6 +65,8 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 | `RICETTA_007` | Index `{name}` does not exist. |
 | `RICETTA_008` | Index `{name}` already exists. |
 | `RICETTA_009` | Value count ({got}) does not match column count ({expected}). |
+| `RICETTA_010` | Ingredient `{name}` is ambiguous — it exists in more than one noodle in this TOSS. If this clause supports qualified names (e.g. `table.{name}`), use one to disambiguate. |
+| `RICETTA_011` | Ingredient `{name}` is neither in BUNDLED BY nor wrapped in an aggregate function. |
 
 ## Constraint Errors (VINCOLO_)
 
@@ -105,6 +107,7 @@ Scottatura [RICETTA_004]: Cannot toss a noodle mid-simmer without a Marinara Bon
 | `EXEC_001` | `{clause}` is not supported yet — planned for a later phase. |
 | `EXEC_002` | Simmer transactions (BEGIN/FINISH/SPILL) are not executable yet; only single-statement autocommit is supported. |
 | `EXEC_003` | Strainer indexes (STRAIN / REMOVE STRAINER) are not supported yet. |
+| `EXEC_004` | Unknown aggregate function `{name}`. Supported: COUNT, SUM, AVG, MIN, MAX. |
 
 ## Rust Error Type
 

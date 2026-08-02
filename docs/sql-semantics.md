@@ -87,8 +87,9 @@ FROM noodle_name [[AS] alias]
 - At most one `TOSS` (join) per query.
 - `SERVE *` expands to all columns in schema-definition order (Al Dente Key first).
 - Expressions in the select list: column references, literals, arithmetic (`+`, `-`, `*`, `/`), column aliases.
-- `ARRANGED BY` sorts after filtering and joining. Multiple sort columns are supported.
+- `ARRANGED BY` sorts after filtering, joining, and grouping. Multiple sort columns are supported. Each `ARRANGED BY` column must appear in the query's own select list — ordering by a column that exists in the source table but wasn't selected is `RICETTA_003` in v1.
 - `ONLY` and `SKIP` are applied last. `SKIP` without `ONLY` is not supported.
+- An unqualified column reference (in `STRAINED BY`, the select list, or `ARRANGED BY`) that matches more than one joined noodle, or more than one duplicate-named projected column, is `RICETTA_010`.
 
 ## LADLE INTO (INSERT)
 
@@ -139,10 +140,14 @@ Supported operators:
 
 ## TOSS Semantics (JOIN)
 
-Only `TOSS noodle ON a.col = b.col` (inner equi-join) is supported. The Sous Chef selects a join strategy:
+Only `TOSS noodle ON a.col = b.col` (inner equi-join) is supported, and only one `TOSS` per query. Both sides of the `ON` condition are resolved against the *combined* joined schema, so `ON a.x = b.y` and `ON b.y = a.x` behave identically.
+
+The eventual Sous Chef design selects a join strategy based on Strainer availability:
 
 1. **Index-nested-loop**: if either join key has a Strainer, use it. Outer noodle drives; inner probed via index.
 2. **Hash join**: build an in-memory hash map on the smaller noodle's join key, probe with the larger. Used when no Strainer is available.
+
+Strainer indexes aren't implemented yet (Phase 3), so today every `TOSS` runs as a plain nested-loop scan — correctness matches the design above, but not yet the performance strategy.
 
 `LEFT TOSS`, `RIGHT TOSS`, `FULL TOSS` are out of scope for v1 (`PARSE_005`).
 
@@ -151,17 +156,17 @@ Only `TOSS noodle ON a.col = b.col` (inner equi-join) is supported. The Sous Che
 - Any arithmetic involving `VUOTO` produces `VUOTO`.
 - Any comparison involving `VUOTO` produces `VUOTO` (not true or false).
 - `STRAINED BY` includes a strand only if its predicate is `true`. `VUOTO` predicate → strand excluded.
-- `ARRANGED BY` treats `VUOTO` as less than all non-null values (first in `ASC`, last in `DESC`).
+- `ARRANGED BY` treats `VUOTO` as sorting first, always — regardless of `ASC` or `DESC`.
 - `COUNT(col)` skips `VUOTO` values; `COUNT(*)` counts all strands.
 
 ## Aggregate Functions
 
 `COUNT(*)`, `COUNT(col)`, `SUM(col)`, `MIN(col)`, `MAX(col)`, `AVG(col)`.
 
-- Aggregates without `BUNDLED BY` collapse the entire result into one strand.
-- `BUNDLED BY` is supported with one or more columns.
+- Aggregates without `BUNDLED BY` collapse the entire result into one strand — even over zero matching rows (`SERVE COUNT(*) FROM t STRAINED BY 1=0` still returns one strand with `COUNT(*) = 0`).
+- `BUNDLED BY` takes a single bare, unqualified column name (`table.col` qualification is not supported for `BUNDLED BY`).
+- `SERVE *` is not supported alongside `BUNDLED BY` or an aggregate function — every select item must be `BUNDLED BY`'d or wrapped in an aggregate (`RICETTA_011`), checked at plan time.
 - `HAVING` is not supported in v1.
-- Mixing aggregate and non-aggregate columns without `BUNDLED BY` is `PARSE_001`.
 
 ## Type Coercion
 
