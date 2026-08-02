@@ -141,4 +141,10 @@ pub enum Scottatura {
 
     #[error("Scottatura [EXEC_004]: Unknown aggregate function `{name}`. Supported: COUNT, SUM, AVG, MIN, MAX.")]
     UnknownAggregateFunction { name: String },
+
+    #[error("Scottatura [STOVE_003]: Prep Log CRC32 mismatch at LSN {lsn} — truncating log at this point.")]
+    PrepLogCrcMismatch { lsn: u64 },
+
+    #[error("Scottatura [STOVE_005]: I/O error on prep log: {message}")]
+    PrepLogIoError { message: String },
 }
