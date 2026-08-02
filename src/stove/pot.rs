@@ -1,4 +1,5 @@
 use crate::{ColumnDef, Recipe, Scottatura, Value};
+use crate::prep_log::{recovery, PrepLog};
 use crate::stove::catalog::{Catalog, NoodleEntry};
 use crate::stove::heap::{encode_row, heap_delete, heap_insert, heap_scan};
 use crate::stove::page::PageType;
@@ -10,6 +11,7 @@ pub struct Pot {
     tray: WarmingTray,
     catalog: Catalog,
     next_key: i64,
+    prep_log: PrepLog,
 }
 
 fn encode_and_validate(entry: &NoodleEntry, key: i64, values: &[Value]) -> Result<Vec<u8>, Scottatura> {
@@ -21,20 +23,39 @@ fn encode_and_validate(entry: &NoodleEntry, key: i64, values: &[Value]) -> Resul
     encode_row(key, values, &entry.cols)
 }
 
+fn prep_log_path(pot_path: &str) -> String {
+    match pot_path.strip_suffix(".pot") {
+        Some(stripped) => format!("{stripped}.prep"),
+        None => format!("{pot_path}.prep"),
+    }
+}
+
 impl Pot {
     pub fn open(path: &str) -> Result<Self, Scottatura> {
-        let (pot_file, tray, catalog) = if std::path::Path::new(path).exists() {
+        let pre_existing = std::path::Path::new(path).exists();
+        let prep_path = prep_log_path(path);
+
+        // Recovery must run against a cache-free PotFile, before the
+        // Catalog (or anything else) populates the WarmingTray — otherwise
+        // a replayed page write would be shadowed by a stale cache entry.
+        let (mut pot_file, next_lsn) = if pre_existing {
             let mut f = PotFile::open(path)?;
-            let mut t = WarmingTray::new(256);
-            let c = Catalog::load(&mut t, &mut f)?;
-            (f, t, c)
+            let next_lsn = recovery::recover(&mut f, &prep_path)?;
+            (f, next_lsn)
         } else {
-            let mut f = PotFile::create(path)?;
-            let mut t = WarmingTray::new(256);
-            let c = Catalog::init(&mut t, &mut f)?;
-            (f, t, c)
+            (PotFile::create(path)?, 1)
         };
-        Ok(Self { pot_file, tray, catalog, next_key: 1 })
+
+        let mut tray = WarmingTray::new(256);
+        let catalog = if pre_existing {
+            Catalog::load(&mut tray, &mut pot_file)?
+        } else {
+            Catalog::init(&mut tray, &mut pot_file)?
+        };
+
+        let prep_log = PrepLog::init(&prep_path, next_lsn)?;
+
+        Ok(Self { pot_file, tray, catalog, next_key: 1, prep_log })
     }
 
     pub fn noodles(&self) -> Vec<String> {
@@ -101,25 +122,36 @@ impl Pot {
     fn heap_chain_insert(&mut self, root_page: u64, row_bytes: &[u8]) -> Result<(), Scottatura> {
         let mut page_num = root_page;
         loop {
-            let next_page_num = {
+            let inserted_image = {
                 let page = self.tray.fetch(page_num, &mut self.pot_file)?;
                 if heap_insert(page, row_bytes).is_some() {
-                    self.tray.mark_dirty(page_num, 0);
-                    self.tray.flush_simmer(0, &mut self.pot_file)?;
-                    return Ok(());
+                    Some(page.data.to_vec())
+                } else {
+                    None
                 }
+            };
+            if let Some(after_image) = inserted_image {
+                self.log_and_flush(page_num, after_image)?;
+                return Ok(());
+            }
+
+            let next_page_num = {
+                let page = self.tray.fetch(page_num, &mut self.pot_file)?;
                 page.next_page()
             };
             if next_page_num != 0 {
                 page_num = next_page_num;
                 continue;
             }
+
             let new_page = self.pot_file.allocate_page(PageType::Heap)?;
             let new_page_num = new_page.number;
-            let page = self.tray.fetch(page_num, &mut self.pot_file)?;
-            page.set_next_page(new_page_num);
-            self.tray.mark_dirty(page_num, 0);
-            self.tray.flush_simmer(0, &mut self.pot_file)?;
+            let linked_image = {
+                let page = self.tray.fetch(page_num, &mut self.pot_file)?;
+                page.set_next_page(new_page_num);
+                page.data.to_vec()
+            };
+            self.log_and_flush(page_num, linked_image)?;
             page_num = new_page_num;
         }
     }
@@ -142,19 +174,30 @@ impl Pot {
     fn heap_chain_delete(&mut self, root_page: u64, key: i64, cols: &[ColumnDef]) -> Result<bool, Scottatura> {
         let mut page_num = root_page;
         loop {
-            let (deleted, next) = {
+            let (deleted_image, next) = {
                 let page = self.tray.fetch(page_num, &mut self.pot_file)?;
                 let deleted = heap_delete(page, key, cols);
-                (deleted, page.next_page())
+                let image = if deleted { Some(page.data.to_vec()) } else { None };
+                (image, page.next_page())
             };
-            if deleted {
-                self.tray.mark_dirty(page_num, 0);
-                self.tray.flush_simmer(0, &mut self.pot_file)?;
+            if let Some(after_image) = deleted_image {
+                self.log_and_flush(page_num, after_image)?;
                 return Ok(true);
             }
             if next == 0 { return Ok(false); }
             page_num = next;
         }
+    }
+
+    fn log_and_flush(&mut self, page_num: u64, after_image: Vec<u8>) -> Result<(), Scottatura> {
+        self.prep_log.append_write(0, page_num, 0, &after_image)?;
+        self.prep_log.append_commit(0)?;
+        self.tray.mark_dirty(page_num, 0);
+        self.tray.flush_simmer(0, &mut self.pot_file)?;
+        if self.prep_log.should_checkpoint() {
+            self.prep_log.checkpoint(&mut self.tray, &mut self.pot_file)?;
+        }
+        Ok(())
     }
 }
 

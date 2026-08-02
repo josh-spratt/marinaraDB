@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ONLY` / `SKIP` (LIMIT / OFFSET), applied after ordering
 - `BUNDLED BY` (GROUP BY) and aggregate functions `COUNT`/`SUM`/`AVG`/`MIN`/`MAX`, with strict validation rejecting `SELECT *` and ungrouped/unaggregated columns in aggregate-context queries
 - `AmbiguousColumn`, `ColumnNotGroupedOrAggregated`, `UnknownAggregateFunction` Scottatura error variants (RICETTA_010, RICETTA_011, EXEC_004)
+- Prep Log (write-ahead log) — on-disk record format (`src/prep_log/record.rs`), append-only writer with fsync-ordered commit durability, checkpoint-and-truncate, and crash recovery run on every `Pot::open`; heap insert/delete now write through the log under the autocommit Simmer ID `0` before touching the `.pot` file
+- `STOVE_003` (Prep Log CRC32 mismatch), `STOVE_005` (I/O error on prep log) Scottatura error codes
+- Scope note: the `.prep` file is fully reinitialized on every `Pot::open` after recovery replay completes. Safe today because autocommit statements under Simmer ID `0` never overlap within a session; revisit once concurrent/long-lived Simmers exist (Simmer transactions — a later phase).
 - Scope note: `ARRANGED BY` currently requires the ordered column to appear in the query's own SELECT list/projection — ordering by a column that exists in the source table but wasn't selected is not yet supported (raises `ColumnNotFound`). Candidate for a future phase.
 - Scope note: `BUNDLED BY` only accepts a single bare unqualified column name (no `table.column` syntax) — grouping a joined query by a column name that exists identically in more than one joined table (e.g. every table's implicit `id`) is not currently expressible and raises `AmbiguousColumn`. Candidate for a future phase.
 
