@@ -44,5 +44,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Scottatura error type with typed variants and Italian-flavoured messages
 - 8 integration tests covering create/drop noodle, insert, scan, persistence, and constraint violations
 
-[Unreleased]: https://github.com/joshuaspratt/marinaraDB/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/joshuaspratt/marinaraDB/releases/tag/v0.1.0
+[Unreleased]: https://github.com/josh-spratt/marinaraDB/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/josh-spratt/marinaraDB/releases/tag/v0.1.0
