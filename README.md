@@ -138,3 +138,7 @@ To cut a release:
 5. Push: `git push && git push --tags`
 
 See [CHANGELOG.md](CHANGELOG.md) for the full history.
+
+## License
+
+[MIT](LICENSE)
