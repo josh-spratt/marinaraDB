@@ -6,109 +6,87 @@
 
 > *A relational database that's been simmering on the stove all day.*
 
-A fully functional toy RDBMS written in Rust, with pasta-themed terminology and a custom SQL-like query language called SaucQL. See [SPEC.md](SPEC.md) for the full design.
+MarinaraDB is a small relational database written from scratch in Rust: a paged on-disk file format, a write-ahead log with crash recovery, a SQL-style parser, a query planner and an executor, plus an interactive shell. The query language is called **SaucQL**. It has real SQL semantics and deliberately silly pasta syntax.
 
-## Current Status
+It's a learning project, not a production database. The point is to build every layer of a database by hand and keep each one small enough to read.
 
-**Phase 2c — Joins, Ordering, Limiting, Grouping & Aggregates** (unreleased, building on `v0.1.0`)
-
-The storage layer, SaucQL parser, and executor are implemented and tested, including multi-table queries. Transactions and Strainer indexes are parsed but not yet executable.
-
-What works:
-- Open/create a `.pot` database file; data persists across process restarts
-- Create and drop noodles (tables) with typed ingredients (columns)
-- `Pot::execute(sauql)` — run a SaucQL string end-to-end:
-  - `PLATE noodle` / `TOSS OUT noodle` (CREATE/DROP TABLE)
-  - `LADLE INTO ... PORTIONS ...` (INSERT), including partial column lists and multi-row inserts
-  - `SERVE ... FROM ... STRAINED BY ...` (SELECT with WHERE) — full expression support: comparisons, `AND`/`OR`/`NOT`, `IS VUOTO`, `BETWEEN`, `LIKE`, `IN`, three-valued VUOTO logic, `INTEGER`→`REAL` coercion
-  - `TOSS` (inner equi-join) — a single join per query, with qualifier-aware column resolution (`table.column`) and ambiguity detection for unqualified references that match more than one joined table
-  - `ARRANGED BY` (ORDER BY) — multi-key sort; VUOTO always sorts first, regardless of `ASC`/`DESC`
-  - `ONLY`/`SKIP` (LIMIT/OFFSET), applied after ordering
-  - `BUNDLED BY` (GROUP BY) with `COUNT`/`SUM`/`AVG`/`MIN`/`MAX` aggregate functions
-  - `SEASON ... SET ... STRAINED BY ...` (UPDATE)
-  - `DISCARD FROM ... STRAINED BY ...` (DELETE)
-- Multi-page heap storage — tables are no longer capped at one page of rows
-- Auto-increment Al Dente Keys (primary keys)
-- `NOT VUOTO` (NOT NULL) constraint enforcement
-
-Two intentional scope limits for now (see `docs/sql-semantics.md`): `ARRANGED BY` can only sort by a column that's in the query's own `SERVE` list, and `BUNDLED BY` only accepts a single bare unqualified column name (so grouping a joined query by a column both tables share, like the implicit `id`, isn't yet expressible).
-
-What's stubbed (not yet executable — parses but returns a clear error):
-- Transactions (`BEGIN`/`FINISH`/`SPILL SIMMER`) — awaiting the Prep Log (WAL)
-- `STRAIN`/`REMOVE STRAINER` (B-tree indexes) — Phase 3
-- WAL-based crash recovery
-
-## Prerequisites
-
-- Rust toolchain (`rustc` + `cargo`), 2021 edition or later
-- Install via [rustup](https://rustup.rs) if you don't have it: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-
-## Build
-
-```sh
-cargo build
+```text
+marinara> SERVE name, price FROM dishes STRAINED BY vegetarian = 1 ARRANGED BY price DESC ONLY 3;
+name                   | price
+-----------------------|------
+Quattro Formaggi Pizza | 15.5
+Fettuccine Alfredo     | 15
+Penne all'Arrabbiata   | 14
 ```
 
-## Run Tests
+## Try it
+
+You need a [Rust toolchain](https://rustup.rs). Then load the sample restaurant data (18 customers, 18 dishes, 40 orders) and open the shell:
 
 ```sh
-cargo test
+git clone https://github.com/josh-spratt/marinaraDB
+cd marinaraDB
+cargo run -- trattoria.pot < examples/trattoria_seed.sauql
+cargo run -- trattoria.pot
 ```
 
-All 173 tests should pass (unit tests across `src/`, plus integration suites in `tests/foundation.rs`, `tests/parser.rs`, and `tests/executor.rs` covering create/drop noodle, insert, scan, persistence, constraint violations, joins, ordering, limiting, grouping, and aggregates).
-
-## Run the Binary
-
-Launch an interactive REPL session:
-
-```sh
-cargo run
-# MarinaraDB v0.1.0 — Buon appetito!
-# Connected to marinara.pot. Type .help for commands, .quit to exit.
-marinara> PLATE noodle users (name TEXT, age INT);
-marinara> LADLE INTO users (name, age) PORTIONS ('Tony', 38);
-marinara> SERVE * FROM users;
-id | name | age
----|------|----
-1  | Tony | 38
+```text
 marinara> .tables
-users
-marinara> .quit
+customers
+dishes
+orders
+marinara> SERVE customer_id, COUNT(*) FROM orders BUNDLED BY customer_id ARRANGED BY customer_id ONLY 3;
 ```
 
-Or open a specific database file:
+End each statement with `;`. Shell commands: `.tables`, `.help`, `.quit`. A statement that fails prints its error and the session carries on. Run `cargo run` with no path to open `marinara.pot` in the current directory.
 
-```sh
-cargo run -- path/to/db.pot
+## SaucQL in a minute
+
+| SaucQL | SQL |
+|---|---|
+| `PLATE noodle t (...)` / `TOSS OUT noodle t` | `CREATE TABLE` / `DROP TABLE` |
+| `LADLE INTO t (cols) PORTIONS (...)` | `INSERT INTO ... VALUES` |
+| `SERVE cols FROM t` | `SELECT cols FROM t` |
+| `STRAINED BY expr` | `WHERE expr` |
+| `SEASON t SET col = x` | `UPDATE t SET col = x` |
+| `DISCARD FROM t` | `DELETE FROM t` |
+| `TOSS u ON a = b` | `INNER JOIN u ON a = b` |
+| `ARRANGED BY` / `ONLY n` / `SKIP n` | `ORDER BY` / `LIMIT n` / `OFFSET n` |
+| `BUNDLED BY` | `GROUP BY` (with `COUNT`, `SUM`, `AVG`, `MIN`, `MAX`) |
+| `NOT VUOTO` / `IS VUOTO` | `NOT NULL` / `IS NULL` |
+
+```sql
+PLATE noodle users (name TEXT NOT VUOTO, age INT);
+LADLE INTO users (name, age) PORTIONS ('Tony', 38), ('Maria', 29);
+SEASON users SET age = 39 STRAINED BY name = 'Tony';
+SERVE name, age FROM users STRAINED BY age > 30;
 ```
 
-Commands:
-- End each SaucQL statement with `;` (the parser's statement terminator)
-- `.tables` — list all tables
-- `.help` — show command help
-- `.quit` / `.exit` — exit the shell
+Conditions support comparisons, `AND` / `OR` / `NOT`, `BETWEEN`, `LIKE`, `IN` and three-valued `VUOTO` logic. Every table gets an auto-incrementing `id` (the **Al Dente Key**). Column types are `INT`, `REAL`, `TEXT` and `BLOB`.
 
-Error recovery: if a statement fails to parse or execute, MarinaraDB prints the error and returns to the prompt; the session continues normally.
+The pasta vocabulary carries through the codebase: a database is a **Pot**, a table a **Noodle**, a row a **Strand**, an index a **Strainer**, the write-ahead log the **Prep Log**, and an error a **Scottatura**. The full glossary and grammar are in [SPEC.md](SPEC.md).
 
-## Use the Library
+## How it works
 
-Add `marinaradb` as a path dependency in your `Cargo.toml`, then:
+A statement travels through these layers, each in its own module under `src/`:
 
-```rust
-use marinaradb::{ColumnDef, ColType, Pot, Value};
-
-let mut pot = Pot::open("my_app.pot")?;
-pot.create_table("users", vec![
-    ColumnDef { name: "name".into(), col_type: ColType::Text,    nullable: false, strainer_root: None },
-    ColumnDef { name: "age".into(),  col_type: ColType::Integer, nullable: true,  strainer_root: None },
-])?;
-
-let key = pot.insert_strand("users", vec![Value::Text("Tony".into()), Value::Integer(38)])?;
-
-let rows = pot.scan_noodle("users")?; // Vec<(i64, Vec<Value>)>
+```text
+SaucQL text → parser → sous_chef (planner) → stove (executor)
+                                                  ↓
+                          prep_log (WAL) ← → warming_tray (page cache) ← → .pot file
 ```
 
-Or drive it with SaucQL directly via `Pot::execute`, which parses, plans, and runs a statement in one call:
+- **`parser`**: a hand-written recursive-descent parser that turns SaucQL into a syntax tree.
+- **`sous_chef`**: plans a parsed statement and rejects anything not yet supported with a clear error.
+- **`stove`**: executes plans against heap storage, which chains 4 KB pages with CRC32 checksums.
+- **`prep_log`**: a write-ahead log. Changes are written and synced to the log before the `.pot` file is touched, and recovery replays the log on every open.
+- **`strainer`**: B-tree indexes (not wired up yet, see below).
+
+Design notes for each layer are in [`docs/`](docs): [storage format](docs/storage-format.md), [WAL format](docs/wal-format.md), [SQL semantics](docs/sql-semantics.md), [type system](docs/type-system.md), [error taxonomy](docs/error-taxonomy.md) and [testing strategy](docs/testing-strategy.md).
+
+## Use it as a library
+
+Add `marinaradb` as a path dependency, then:
 
 ```rust
 use marinaradb::Pot;
@@ -116,7 +94,6 @@ use marinaradb::Pot;
 let mut pot = Pot::open("my_app.pot")?;
 pot.execute("PLATE noodle users (name TEXT NOT VUOTO, age INT);")?;
 pot.execute("LADLE INTO users (name, age) PORTIONS ('Tony', 38), ('Maria', 29);")?;
-pot.execute("SEASON users SET age = 39 STRAINED BY name = 'Tony';")?;
 
 let result = pot.execute("SERVE name, age FROM users STRAINED BY age > 30;")?;
 for row in &result.rows {
@@ -124,20 +101,23 @@ for row in &result.rows {
 }
 ```
 
-See [Current Status](#current-status) for what's parsed but not yet runnable (transactions, Strainer indexes).
+There's also a lower-level API (`Pot::create_table`, `insert_strand`, `scan_noodle`) that skips the parser.
 
-## Versioning and Releases
+## Status
 
-This project uses [Semantic Versioning](https://semver.org). The version in `Cargo.toml` is the source of truth.
+Working today: tables, inserts, updates and deletes, `WHERE` expressions, a single inner join per query, ordering, limits, grouping and aggregates, persistence across restarts, and write-ahead logging with crash recovery. There are over 200 tests (`cargo test`).
 
-To cut a release:
-1. Update `version` in `Cargo.toml`
-2. Add a dated section to `CHANGELOG.md`
-3. Commit: `git commit -m "chore: release vX.Y.Z"`
-4. Tag: `git tag vX.Y.Z`
-5. Push: `git push && git push --tags`
+Not yet working:
 
-See [CHANGELOG.md](CHANGELOG.md) for the full history.
+- **Transactions** (`BEGIN SIMMER` / `FINISH SIMMER` / `SPILL SIMMER`) parse but return a clear error when run.
+- **Indexes** (`STRAIN` / `REMOVE STRAINER`) parse but aren't executable. Queries use full scans.
+- **Foreign keys** aren't enforced.
+- `ARRANGED BY` can only sort by a column in the query's own `SERVE` list, and `BUNDLED BY` takes one bare column name, so you can't yet group a join by a column that exists in both tables.
+- Table creation and drops aren't logged in the Prep Log yet. See [CHANGELOG.md](CHANGELOG.md) for the full list of known limits.
+
+## Contributing and releases
+
+This is a personal project, but issues are welcome. Versions follow [Semantic Versioning](https://semver.org), with `Cargo.toml` as the source of truth. To release, bump the version, add a dated section to [CHANGELOG.md](CHANGELOG.md), commit, tag `vX.Y.Z` and push the tag.
 
 ## License
 
